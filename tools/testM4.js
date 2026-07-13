@@ -22,6 +22,8 @@ function newGame(n) {
   clearTimeout(game.timer);
   let i = 0;
   for (const u of game.units.values()) { [u.x, u.y] = isolated[i++]; }
+  // 테스트 편의: 전원 접촉 처리
+  for (const a of civs) for (const b of civs) if (a.id < b.id) game.contacts.add(a.id + ':' + b.id);
   return { game, civs };
 }
 const unitsOf = (g, id) => [...g.units.values()].filter(u => u.civ === id);
@@ -36,9 +38,9 @@ const unitsOf = (g, id) => [...g.units.values()].filter(u => u.civ === id);
   game.resolveExecution();
   check(A.tech.military === 1, '군사 Lv1 완료');
 
-  A.resources.meat = 20;
+  A.resources.grain = 20;
   const rd = game.researchOrder(A.id, 'defense');
-  check(rd.ok && rd.res === 'meat', '방어 연구는 고기 소모');
+  check(rd.ok && rd.res === 'grain', '인구 연구는 곡식 소모');
   game.resolveExecution();
   check(A.tech.defense === 1, '방어 Lv1 완료');
 
@@ -209,9 +211,9 @@ const unitsOf = (g, id) => [...g.units.values()].filter(u => u.civ === id);
   for (const k of findTiles('m', 1)) game.setTile(k, B.id);
   for (const k of findTiles('m', 1)) game.setTile(k, C.id);
   const a = game.civs.get(A.id), b = game.civs.get(B.id), c = game.civs.get(C.id);
-  a.resources = { meat: 0, grain: 0, wood: 0, iron: 0 };
-  b.resources = { meat: 0, grain: 0, wood: 0, iron: 0 };
-  c.resources = { meat: 0, grain: 0, wood: 0, iron: 0 };
+  a.resources = { stone: 0, grain: 0, wood: 0, iron: 0 };
+  b.resources = { stone: 0, grain: 0, wood: 0, iron: 0 };
+  c.resources = { stone: 0, grain: 0, wood: 0, iron: 0 };
   const r = game.resolveExecution();
   // 동맹 합산: 철3 + 곡식1 → A(3/4 영토): 철2+곡식1, B(1/4 영토): 철1
   check(a.resources.iron === 2 && a.resources.grain === 1, `A 배분: 철${a.resources.iron} 곡식${a.resources.grain} (영토 3/4)`);
@@ -259,6 +261,82 @@ const unitsOf = (g, id) => [...g.units.values()].filter(u => u.civ === id);
   const rr2 = game.acceptAlly(Z.id, X.id);
   const ok2 = game.consentAlly(Y.id, rr2.pair, true);
   check(ok2.ok && game.isAllied(X.id, Z.id), '재시도 + 동의 → 성립');
+}
+
+// ── 11.5 보물상자: 배치·습득·기술 선택
+{
+  const { game, civs } = newGame(4);
+  const A = game.civs.get(civs[0].id);
+  check(game.treasures.size === 2, `보물 2개 배치 (4인의 1/2, 실제 ${game.treasures.size})`);
+  // 모든 보물이 수도에서 8헥스 이상
+  let farOk = true;
+  for (const k of game.treasures.keys()) {
+    const [tx2, ty2] = k.split(',').map(Number);
+    for (const c of game.civs.values()) {
+      const dx = Math.abs(c.capital[0] - tx2), dy = Math.abs(c.capital[1] - ty2);
+      if (dx + dy < 8 && Math.max(dx, dy) < 8) farOk = false;
+    }
+  }
+  check(farOk, '보물은 모든 수도에서 멀리 배치');
+
+  // 자원 상자: 유닛이 지나가면 +20씩
+  const u = unitsOf(game, A.id)[0];
+  const nb = world.neighbors(u.x, u.y).find(([x, y]) => world.isLand(x, y));
+  game.treasures.clear();
+  game.treasures.set(nb[0] + ',' + nb[1], { kind: 'res' });
+  const before = A.resources.iron;
+  game.moveOrder(A.id, u.id, nb);
+  const r = game.resolveExecution();
+  check(r.treasures.length === 1 && r.treasures[0].kind === 'res', '자원 상자 습득 이벤트');
+  check(A.resources.iron >= before + 20, `모든 자원 +20 (철 ${A.resources.iron})`);
+  check(game.treasures.size === 0, '습득한 상자는 제거');
+
+  // 기술 상자: 선택 대기 → 선택 적용
+  const nb2 = world.neighbors(u.x, u.y).find(([x, y]) => world.isLand(x, y) && !(x === u.x && y === u.y));
+  game.treasures.set(nb2[0] + ',' + nb2[1], { kind: 'tech' });
+  game.moveOrder(A.id, u.id, nb2);
+  const r2 = game.resolveExecution();
+  check(r2.treasures.length === 1 && r2.treasures[0].choice === true, '기술 상자 → 선택 대기');
+  check(game.chooseTreasureTech(A.id, 'wrongbranch').ok === false, '잘못된 계통 거부');
+  const ch = game.chooseTreasureTech(A.id, 'gather');
+  check(ch.ok && A.tech.gather === 1, '선택한 기술 +1');
+  check(game.chooseTreasureTech(A.id, 'gather').reason === 'notreasure', '중복 선택 불가');
+
+  // 봇은 자동 선택
+  const rb = game.addBot();
+  const bot = game.civs.get(rb.civ.id);
+  const ev = game.grantTreasure(bot.id, { kind: 'tech' }, 0, 0);
+  check(ev.branch != null && bot.tech[ev.branch] === 1, `봇 자동 기술 선택 (${ev.branch})`);
+}
+
+// ── 12. 접촉해야 동맹 가능
+{
+  const game = new Game(world, () => {});
+  const a = game.join(undefined, 'X').civ, b = game.join(undefined, 'Y').civ;
+  game.startGame();
+  clearTimeout(game.timer);
+  // 유닛·영토를 멀리 떨어뜨리고 접촉 초기화
+  let i = 40;
+  for (const u of game.units.values()) {
+    if (isolated[i]) { [u.x, u.y] = isolated[i]; }
+    i += 3;
+  }
+  game.territory.clear();
+  game.territoryByCiv.clear();
+  game.contacts.clear();
+  game.resolveExecution();
+  check(!game.hasContact(a.id, b.id), '원거리 → 접촉 없음');
+  check(game.proposeAlly(a.id, b.id).reason === 'nocontact', '미접촉 → 동맹 제안 거부');
+  // 유닛을 인접 배치 → 접촉 성립
+  const ua = [...game.units.values()].find(u => u.civ === a.id);
+  const ub = [...game.units.values()].find(u => u.civ === b.id);
+  const nb = world.neighbors(ua.x, ua.y).find(([x, y]) => world.isLand(x, y));
+  if (nb) { ub.x = nb[0]; ub.y = nb[1]; }
+  else { ub.x = ua.x; ub.y = ua.y; }
+  game.resolveExecution();
+  check(game.hasContact(a.id, b.id), '유닛 근접(2헥스) → 접촉 기록');
+  check(game.proposeAlly(a.id, b.id).ok === true, '접촉 후 동맹 제안 가능');
+  check(game.contactsOf(a.id).includes(b.id), 'contactsOf 조회');
 }
 
 console.log(fail === 0 ? '\n모든 테스트 통과' : `\n실패 ${fail}건`);

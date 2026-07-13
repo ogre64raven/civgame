@@ -43,16 +43,20 @@ function makeGame() {
       births: result.births,
       delegations: result.delegations, techUpdates: result.techUpdates,
       allyLeft: result.allyLeft, absorptions: result.absorptions, scores: result.scores,
+      treasures: result.treasures,
     });
     for (const c of wss.clients) {
       if (c.readyState !== 1 || c.civId == null) continue;
       const civ = g.civs.get(c.civId);
       if (!civ) continue;
-      sendTo(c, { type: 'resources', resources: civ.resources, gained: result.gains[c.civId] || null });
+      sendTo(c, { type: 'resources', resources: civ.resources, gained: result.gains[c.civId] || null, contacts: game.contactsOf(c.civId) });
       const rf = result.researchFails.find(f => f.civId === c.civId);
       if (rf) sendTo(c, { type: 'researchFailed', reason: rf.reason });
       const sf = result.spawnFails.find(f => f.civId === c.civId);
       if (sf) sendTo(c, { type: 'spawnFailed', reason: sf.reason });
+      for (const ev of result.treasures || []) {
+        if (ev.choice && ev.by === c.civId) sendTo(c, { type: 'treasureTechOffer' });
+      }
     }
     if (result.gameover) broadcast({ type: 'gameover', ...result.gameover });
   };
@@ -96,6 +100,7 @@ function handleAdmin(req, res, url, body) {
       type: 'gameStarted',
       units: [...game.units.values()],
       territory: game.territoryPublic(),
+      treasures: game.treasuresPublic(),
       phase: game.phase, turn: game.turn, endsAt: game.phaseEnds,
     });
     return send(200, { ok: true });
@@ -198,6 +203,7 @@ wss.on('connection', (ws) => {
           resources: r.civ.resources,
           orders: game.ordersOf(r.civ.id),
           proposals: [...(game.allyProposals.get(r.civ.id) || [])],
+          contacts: game.contactsOf(r.civ.id),
           ...game.snapshot(),
         });
         broadcast({
@@ -280,6 +286,14 @@ wss.on('connection', (ws) => {
         if (!r.ok) { sendTo(ws, { type: 'delegateRejected', reason: r.reason }); break; }
         if (r.changes.length) broadcast({ type: 'delegations', delegations: r.changes });
         sendTo(ws, { type: 'delegateAck', civId: msg.civId, count: r.count });
+        break;
+      }
+      case 'treasure.choose': {
+        if (ws.civId == null) return;
+        const r = game.chooseTreasureTech(ws.civId, msg.branch);
+        if (!r.ok) { sendTo(ws, { type: 'treasureRejected', reason: r.reason }); break; }
+        broadcast({ type: 'techUpdate', civId: ws.civId, branch: r.branch, level: r.level });
+        if (r.remaining > 0) sendTo(ws, { type: 'treasureTechOffer' });
         break;
       }
       case 'chat': {

@@ -7,7 +7,7 @@ const MAX_PLAYERS = 30;
 const START_UNITS = 3;                  // 시작 유닛 수
 const SPAWN_COST = 10;                  // 유닛 생산 비용 (고기·곡식 각각)
 const TECH_MAX = 5;
-const TECH_RES = { military: 'iron', defense: 'meat', gather: 'wood', move: 'grain' };
+const TECH_RES = { military: 'iron', defense: 'grain', gather: 'wood', move: 'stone' };
 const techCost = (targetLevel) => 20 * targetLevel;
 const ALLY_MAX = 3;                     // 동맹 그룹 최대 인원
 const ABSORB_RATIO = 0.8;               // 8:2 초과
@@ -60,6 +60,9 @@ class Game {
     this.allyConsents = new Map();      // 'a:b' -> { a, b, approver } (제3국 동의 대기)
     this.leaveOrders = [];
     this.absorbCounters = new Map();
+    this.contacts = new Set();          // 접촉한 문명 쌍 'a:b' (영구)
+    this.treasures = new Map();         // 'x,y' -> { kind: 'res'|'tech' }
+    this.pendingTechChoices = new Map(); // civId -> 남은 기술 선택 횟수
     this.ended = false;
     this.pool = shuffle(eligibleCountryIndices(world));
     this.nextCivId = 1;
@@ -77,6 +80,7 @@ class Game {
     if (this.state !== 'LOBBY') return { ok: false, reason: 'state' };
     if (this.civs.size < 1) return { ok: false, reason: 'noplayers' };
     for (const civ of this.civs.values()) this.enterWorld(civ);
+    this.placeTreasures();
     this.state = 'RUNNING';
     this.phase = 'MEETING';
     this.armTimer();
@@ -155,6 +159,100 @@ class Game {
     const t = civ.tech;
     return (t.military + t.defense + t.gather + t.move) + this.tileCountOf(civ.id);
   }
+  // 보물상자 배치: 시작 인원의 1/2개, 수도에서 먼 험지·외딴 섬 우선
+  placeTreasures() {
+    this.treasures.clear();
+    const count = Math.floor(this.civs.size / 2);
+    if (count < 1) return;
+    // 모든 수도로부터의 BFS 거리
+    const dist = new Map();
+    let frontier = [];
+    for (const c of this.civs.values()) {
+      const k = c.capital[0] + ',' + c.capital[1];
+      if (!dist.has(k)) { dist.set(k, 0); frontier.push(c.capital); }
+    }
+    while (frontier.length) {
+      const next = [];
+      for (const [cx, cy] of frontier) {
+        const d = dist.get(cx + ',' + cy);
+        for (const [nx, ny] of this.world.neighbors(cx, cy)) {
+          const k = nx + ',' + ny;
+          if (!dist.has(k)) { dist.set(k, d + 1); next.push([nx, ny]); }
+        }
+      }
+      frontier = next;
+    }
+    const sizes = this.world.componentSizes();
+    const cands = [];
+    for (let y = 0; y < this.world.h; y++) {
+      for (let x = 0; x < this.world.w; x++) {
+        if (!this.world.isLand(x, y)) continue;
+        const k = x + ',' + y;
+        const d = dist.get(k) ?? 40;
+        if (d < 8) continue; // 수도 근처 제외
+        const t = this.world.terrain(x, y);
+        let score = d;
+        if (t === 'M') score += 8;
+        else if (t === 'm') score += 4;
+        else if (t === 'h') score += 2;
+        if ((sizes.get(k) || 999) <= 12) score += 8; // 외딴 섬
+        cands.push({ x, y, k, score });
+      }
+    }
+    cands.sort((a, b) => b.score - a.score);
+    const placed = [];
+    for (const c of cands) {
+      if (placed.length >= count) break;
+      if (placed.some(p => Math.abs(p.x - c.x) < 8 && Math.abs(p.y - c.y) < 8)) continue;
+      placed.push(c);
+      this.treasures.set(c.k, { kind: placed.length % 2 === 1 ? 'res' : 'tech' });
+    }
+  }
+
+  treasuresPublic() {
+    return [...this.treasures.keys()].map(k => k.split(',').map(Number));
+  }
+
+  // 보물 습득 처리
+  grantTreasure(civId, tr, x, y) {
+    const civ = this.civs.get(civId);
+    const ev = { x, y, by: civId, kind: tr.kind };
+    if (!civ) return ev;
+    let kind = tr.kind;
+    if (kind === 'tech') {
+      const openBranch = ['military', 'defense', 'gather', 'move'].filter(b => civ.tech[b] < TECH_MAX);
+      if (openBranch.length === 0) kind = 'res'; // 전부 만렙이면 자원으로 대체
+      else if (civ.isBot) {
+        let best = openBranch[0];
+        for (const b of openBranch) if (civ.tech[b] < civ.tech[best]) best = b;
+        civ.tech[best]++;
+        ev.branch = best;
+        ev.level = civ.tech[best];
+      } else {
+        this.pendingTechChoices.set(civId, (this.pendingTechChoices.get(civId) || 0) + 1);
+        ev.choice = true;
+      }
+    }
+    if (kind === 'res') {
+      for (const r2 of ['stone', 'grain', 'wood', 'iron']) civ.resources[r2] += 20;
+      ev.kind = 'res';
+    }
+    return ev;
+  }
+
+  // 기술 보물: 계통 선택
+  chooseTreasureTech(civId, branch) {
+    const n = this.pendingTechChoices.get(civId) || 0;
+    if (n <= 0) return { ok: false, reason: 'notreasure' };
+    const civ = this.civs.get(civId);
+    if (!civ || !(branch in TECH_RES)) return { ok: false, reason: 'branch' };
+    if (civ.tech[branch] >= TECH_MAX) return { ok: false, reason: 'max' };
+    civ.tech[branch]++;
+    if (n === 1) this.pendingTechChoices.delete(civId);
+    else this.pendingTechChoices.set(civId, n - 1);
+    return { ok: true, branch, level: civ.tech[branch], remaining: n - 1 };
+  }
+
   // 유닛 상한 = 시작 3기 + 인구(defense) 기술 레벨
   maxUnits(civ) { return START_UNITS + ((civ.tech && civ.tech.defense) || 0); }
   unitCountOf(civId) { let n = 0; for (const u of this.units.values()) if (u.civ === civId) n++; return n; }
@@ -209,7 +307,8 @@ class Game {
       if (u.stunned > 0) { stunnedNow.add(u.id); u.stunned--; }
     }
 
-    // ① 이동 + 경로 영토화
+    // ① 이동 + 경로 영토화 (+보물 습득)
+    const treasureEvents = [];
     const moves = [];
     for (const [unitId, order] of this.orders) {
       const u = this.units.get(unitId);
@@ -226,6 +325,11 @@ class Game {
         order.idx++;
         u.x = nx; u.y = ny;
         this.claim(nx, ny, u.civ); // 바다는 claim에서 무시됨
+        const tr = this.treasures.get(nx + ',' + ny);
+        if (tr) {
+          this.treasures.delete(nx + ',' + ny);
+          treasureEvents.push(this.grantTreasure(u.civ, tr, nx, ny));
+        }
       }
       moves.push({ unitId, x: u.x, y: u.y });
       if (order.idx >= order.path.length) this.orders.delete(unitId);
@@ -234,6 +338,9 @@ class Game {
     // ② 전투 (사망 없음 — 패자는 수도 후퇴 + 2턴 행동불능)
     const { battles, stuns, retreats } = this.resolveBattles(stunnedNow);
     for (const r of retreats) moves.push(r);
+
+    // ②.5 접촉 기록 (동맹 가능 조건)
+    this.updateContacts();
 
     // ③ 수도 공성: 수도 위 적 유닛이 유닛당 (1+군사Lv) 피해, HP 0 → 함락.
     //    공격이 없으면 턴당 1 회복 (최대 5+기술총합)
@@ -293,8 +400,8 @@ class Game {
       const fail = (reason) => spawnFails.push({ civId, reason });
       if (!civ || !civ.alive) { fail('dead'); continue; }
       if (this.unitCountOf(civId) >= this.maxUnits(civ)) { fail('cap'); continue; }
-      if (civ.resources.meat < SPAWN_COST || civ.resources.grain < SPAWN_COST) { fail('cost'); continue; }
-      civ.resources.meat -= SPAWN_COST;
+      if (civ.resources.stone < SPAWN_COST || civ.resources.grain < SPAWN_COST) { fail('cost'); continue; }
+      civ.resources.stone -= SPAWN_COST;
       civ.resources.grain -= SPAWN_COST;
       const uid = this.nextUnitId++;
       const nu = { id: uid, civ: civId, x: civ.capital[0], y: civ.capital[1], stunned: 0 };
@@ -358,6 +465,7 @@ class Game {
     return {
       moves, battles, stuns, captures, capitalHits, conquests, delegations: this._delegations,
       gains, births, spawnFails, techUpdates, researchFails, allyLeft, absorptions, gameover,
+      treasures: treasureEvents,
       scores: this.scoresPublic(),
     };
   }
@@ -443,20 +551,20 @@ class Game {
 
   // 채취 수입 계산. 동맹 그룹은 합산 후 영토 수 비율로 배분(최대 잉여법)
   resolveIncome() {
-    const RES = ['meat', 'grain', 'wood', 'iron'];
+    const RES = ['stone', 'grain', 'wood', 'iron'];
     const income = new Map(); // civId -> {res} (자체 채집 기술 적용)
     for (const civ of this.civs.values()) {
       if (!civ.alive) continue;
       const tiles = this.territoryByCiv.get(civ.id);
       if (!tiles || tiles.size === 0) continue;
-      const count = { meat: 0, grain: 0, wood: 0, iron: 0 };
+      const count = { stone: 0, grain: 0, wood: 0, iron: 0 };
       for (const k of tiles) {
         const [x, y] = k.split(',').map(Number);
         const res = this.world.resourceAt(x, y);
         if (res) count[res]++;
       }
       const mult = 1 + 0.2 * (civ.tech.gather || 0);
-      const g = { meat: 0, grain: 0, wood: 0, iron: 0 };
+      const g = { stone: 0, grain: 0, wood: 0, iron: 0 };
       for (const res of RES) g[res] = Math.ceil(count[res] * mult);
       income.set(civ.id, g);
     }
@@ -488,7 +596,7 @@ class Game {
         if (g) apply(members[0], g);
         continue;
       }
-      const pool = { meat: 0, grain: 0, wood: 0, iron: 0 };
+      const pool = { stone: 0, grain: 0, wood: 0, iron: 0 };
       for (const id of members) {
         const g = income.get(id);
         if (g) for (const res of RES) pool[res] += g[res];
@@ -496,7 +604,7 @@ class Game {
       const tilesOf = members.map(id => this.tileCountOf(id));
       const totalTiles = tilesOf.reduce((a, b) => a + b, 0);
       if (totalTiles === 0) continue;
-      const out = members.map(() => ({ meat: 0, grain: 0, wood: 0, iron: 0 }));
+      const out = members.map(() => ({ stone: 0, grain: 0, wood: 0, iron: 0 }));
       for (const res of RES) {
         if (pool[res] === 0) continue;
         let assigned = 0;
@@ -653,7 +761,7 @@ class Game {
     const civ = this.civs.get(civId);
     if (!civ || !civ.alive) return { ok: false, reason: 'dead' };
     if (this.unitCountOf(civId) >= this.maxUnits(civ)) return { ok: false, reason: 'cap' };
-    if (civ.resources.meat < SPAWN_COST || civ.resources.grain < SPAWN_COST) return { ok: false, reason: 'cost' };
+    if (civ.resources.stone < SPAWN_COST || civ.resources.grain < SPAWN_COST) return { ok: false, reason: 'cost' };
     this.spawnOrders.add(civId);
     return { ok: true, cost: SPAWN_COST };
   }
@@ -674,6 +782,7 @@ class Game {
     const a = this.civs.get(fromId), b = this.civs.get(toId);
     if (!a || !b || fromId === toId) return { ok: false, reason: 'civ' };
     if (!a.alive || !b.alive) return { ok: false, reason: 'dead' };
+    if (!this.hasContact(fromId, toId) && process.env.ALLY_NO_CONTACT_CHECK !== '1') return { ok: false, reason: 'nocontact' };
     if (this.isAllied(fromId, toId)) return { ok: false, reason: 'already' };
     if (new Set([...this.groupOf(fromId), ...this.groupOf(toId)]).size > ALLY_MAX) return { ok: false, reason: 'full' };
     if (this.allyProposals.get(fromId)?.has(toId)) return this.acceptAlly(fromId, toId);
@@ -707,6 +816,49 @@ class Game {
     this.allies.get(a).add(b);
     this.allies.get(b).add(a);
     return { ok: true, formed: [a, b] };
+  }
+
+  // 유닛 기준 반경 2헥스 내 타 문명 유닛/영토와의 접촉 기록
+  updateContacts() {
+    const unitCivsByHex = new Map();
+    for (const u of this.units.values()) {
+      const k = u.x + ',' + u.y;
+      if (!unitCivsByHex.has(k)) unitCivsByHex.set(k, new Set());
+      unitCivsByHex.get(k).add(u.civ);
+    }
+    const mark = (a, b) => {
+      if (a === b || !this.civs.has(a) || !this.civs.has(b)) return;
+      this.contacts.add(Math.min(a, b) + ':' + Math.max(a, b));
+    };
+    for (const u of this.units.values()) {
+      const seen = new Set([u.x + ',' + u.y]);
+      let frontier = [[u.x, u.y]];
+      for (let d = 0; d <= 2; d++) {
+        const next = [];
+        for (const [cx, cy] of frontier) {
+          const k = cx + ',' + cy;
+          const others = unitCivsByHex.get(k);
+          if (others) for (const o of others) mark(u.civ, o);
+          const owner = this.territory.get(k);
+          if (owner != null) mark(u.civ, owner);
+          if (d < 2) {
+            for (const nb of this.world.neighbors(cx, cy)) {
+              const nk = nb[0] + ',' + nb[1];
+              if (!seen.has(nk)) { seen.add(nk); next.push(nb); }
+            }
+          }
+        }
+        frontier = next;
+      }
+    }
+  }
+  hasContact(a, b) { return this.contacts.has(Math.min(a, b) + ':' + Math.max(a, b)); }
+  contactsOf(civId) {
+    const out = [];
+    for (const c of this.civs.values()) {
+      if (c.id !== civId && this.hasContact(civId, c.id)) out.push(c.id);
+    }
+    return out;
   }
 
   // 동맹 그룹(연결 요소) — 자신 포함
@@ -764,11 +916,12 @@ class Game {
     return out;
   }
 
-  // 지형별 이동 비용: 평지(초원·평원·숲) 1, 산지 2, 바다 3
+  // 지형별 이동 비용: 평지 1, 구릉 1.5, 산 2, 고산 3, 바다 3
   moveCost(x, y) {
     const t = this.world.terrain(x, y);
-    if (t === '~') return 3;
+    if (t === '~' || t === 'M') return 3;
     if (t === 'm') return 2;
+    if (t === 'h') return 1.5;
     return 1;
   }
 
@@ -796,7 +949,7 @@ class Game {
           return path.reverse();
         }
         for (const [nx, ny] of this.world.neighbors(cx, cy)) {
-          const cost = this.moveCost(nx, ny);
+          const cost = Math.round(this.moveCost(nx, ny) * 2); // 정수 버킷용 2배 스케일
           const nd = d + cost;
           const nk = key(nx, ny);
           if (nd < (dist.get(nk) ?? Infinity)) {
@@ -845,7 +998,7 @@ class Game {
       color: `hsl(${(id * 137) % 360}, 70%, 55%)`,
       capital: spawn,
       connected: true,
-      resources: { meat: 0, grain: 0, wood: 0, iron: 0 },
+      resources: { stone: 0, grain: 0, wood: 0, iron: 0 },
       tech: { military: 0, defense: 0, gather: 0, move: 0 },
       capitalHp: 5,
       alive: true,
@@ -888,6 +1041,7 @@ class Game {
       civs: [...this.civs.values()].map(c => this.civPublic(c)),
       units: [...this.units.values()],
       territory: this.territoryPublic(),
+      treasures: this.treasuresPublic(),
       alliances: this.alliancesPublic(),
       state: this.state,
       phase: this.phase, turn: this.turn, endsAt: this.phaseEnds,

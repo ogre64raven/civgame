@@ -6,8 +6,8 @@ const Render = (() => {
   const HEX = 14;
   const SQRT3 = Math.sqrt(3);
 
-  const TERRAIN_COLOR = { '~': 0x173a5e, g: 0x6aa84f, p: 0xc9b458, f: 0x38761d, m: 0x8d8d8d };
-  const ELEV = { '~': 0, g: 3, p: 3, f: 4, m: 7 };   // 기둥 높이
+  const TERRAIN_COLOR = { '~': 0x173a5e, g: 0x6aa84f, p: 0xc9b458, f: 0x38761d, h: 0x9aa06e, m: 0x8d8d8d, M: 0x6e747c };
+  const ELEV = { '~': 0, g: 3, p: 3, f: 4, h: 5, m: 8, M: 12 };   // 기둥 높이
   const FOG_COLOR = 0x0c1322;
 
   // ── three 기본 구성
@@ -41,10 +41,15 @@ const Render = (() => {
   const GEO = {
     hex1: new THREE.CylinderGeometry(HEX * 0.94, HEX * 0.94, 1, 6),
     overlay: new THREE.CylinderGeometry(HEX * 0.9, HEX * 0.9, 0.8, 6),
-    fog: new THREE.CylinderGeometry(HEX * 0.985, HEX * 0.985, 26, 6),
+    fog: new THREE.CylinderGeometry(HEX * 0.985, HEX * 0.985, 34, 6),
     cloud: new THREE.SphereGeometry(HEX * 0.78, 6, 4),
     peak: new THREE.ConeGeometry(HEX * 0.62, 11, 6),
+    peakBig: new THREE.ConeGeometry(HEX * 0.72, 15, 6),
+    snow: new THREE.ConeGeometry(HEX * 0.3, 5.5, 6),
     tree: new THREE.ConeGeometry(HEX * 0.3, 7, 6),
+    wheat: new THREE.ConeGeometry(HEX * 0.18, 5.5, 5),
+    rock: new THREE.SphereGeometry(HEX * 0.24, 5, 4),
+    ore: new THREE.BoxGeometry(3.2, 3.2, 3.2),
     ring: new THREE.RingGeometry(HEX * 0.8, HEX * 0.97, 6),
   };
 
@@ -266,13 +271,13 @@ const Render = (() => {
     terrainGroup.add(sea);
 
     // 지형별 인스턴싱
-    const byType = { g: [], p: [], f: [], m: [] };
+    const byType = { g: [], p: [], f: [], h: [], m: [], M: [] };
     for (let y = 0; y < map.h; y++)
       for (let x = 0; x < map.w; x++) {
         const t = map.rows[y][x];
         if (t !== '~') byType[t].push([x, y]);
       }
-    for (const t of ['g', 'p', 'f', 'm']) {
+    for (const t of ['g', 'p', 'f', 'h', 'm', 'M']) {
       const list = byType[t];
       const im = new THREE.InstancedMesh(GEO.hex1, mat(TERRAIN_COLOR[t]), list.length);
       list.forEach(([x, y], i) => {
@@ -285,20 +290,54 @@ const Render = (() => {
         im.setMatrixAt(i, dummy.matrix);
       });
       terrainGroup.add(im);
-      // 산봉우리 / 숲 나무
-      if (t === 'm' || t === 'f') {
-        const deco = new THREE.InstancedMesh(
-          t === 'm' ? GEO.peak : GEO.tree,
-          mat(t === 'm' ? 0x7a828b : 0x1c4a12), list.length);
+      // 산봉우리 (중앙, 지형 특징) — 유닛 가림 최소화를 위해 약간 남쪽으로
+      if (t === 'm' || t === 'M') {
+        const big = t === 'M';
+        const peak = new THREE.InstancedMesh(big ? GEO.peakBig : GEO.peak,
+          mat(big ? 0x5f666f : 0x7a828b), list.length);
         list.forEach(([x, y], i) => {
           const [wx, wz] = worldPos(x, y);
-          dummy.position.set(wx, ELEV[t] + (t === 'm' ? 5.5 : 3.5), wz);
+          dummy.position.set(wx, ELEV[t] + (big ? 7.5 : 5.5), wz + HEX * 0.18);
           dummy.scale.set(1, 1, 1);
           dummy.rotation.set(0, 0, 0);
           dummy.updateMatrix();
-          deco.setMatrixAt(i, dummy.matrix);
+          peak.setMatrixAt(i, dummy.matrix);
         });
-        terrainGroup.add(deco);
+        terrainGroup.add(peak);
+        if (big) { // 설산 꼭대기
+          const snow = new THREE.InstancedMesh(GEO.snow, mat(0xe8edf2), list.length);
+          list.forEach(([x, y], i) => {
+            const [wx, wz] = worldPos(x, y);
+            dummy.position.set(wx, ELEV[t] + 12.5, wz + HEX * 0.18);
+            dummy.scale.set(1, 1, 1);
+            dummy.rotation.set(0, 0, 0);
+            dummy.updateMatrix();
+            snow.setMatrixAt(i, dummy.matrix);
+          });
+          terrainGroup.add(snow);
+        }
+      }
+      // 자원 마커: 헥스 위쪽(북쪽) 배치, 가운데는 유닛 자리
+      const RES_DECO = {
+        g: { geo: GEO.wheat, color: 0xd8b944, dy: 2.6, sy: 1 },     // 곡식 다발
+        p: { geo: GEO.rock, color: 0x9aa1a9, dy: 1.5, sy: 0.62 },   // 돌(바위)
+        f: { geo: GEO.tree, color: 0x1c4a12, dy: 3.5, sy: 1 },      // 나무
+        h: { geo: GEO.ore, color: 0x4a5560, dy: 1.8, sy: 0.8 },     // 철광석(구릉)
+        m: { geo: GEO.ore, color: 0x3d4750, dy: 1.8, sy: 1 },       // 철광석(산)
+        M: { geo: GEO.ore, color: 0x2f3944, dy: 1.8, sy: 1.15 },    // 철광석(고산)
+      };
+      const spec = RES_DECO[t];
+      if (spec) {
+        const marker = new THREE.InstancedMesh(spec.geo, mat(spec.color), list.length);
+        list.forEach(([x, y], i) => {
+          const [wx, wz] = worldPos(x, y);
+          dummy.position.set(wx, ELEV[t] + spec.dy, wz - HEX * 0.55);
+          dummy.scale.set(1, spec.sy, 1);
+          dummy.rotation.set(0, t === 'm' ? 0.65 : 0, 0);
+          dummy.updateMatrix();
+          marker.setMatrixAt(i, dummy.matrix);
+        });
+        terrainGroup.add(marker);
       }
     }
     scene.add(terrainGroup);
@@ -331,7 +370,7 @@ const Render = (() => {
   let visionCache = null, visionAt = 0, fxDirty = false;
 
   function stateSig(state, vision) {
-    let s = state.you + '|' + state.selected + '|' + (vision ? vision.size : -1) + '|' + state.territory.size + '|' + state.gameState;
+    let s = state.you + '|' + state.selected + '|' + (vision ? vision.size : -1) + '|' + state.territory.size + '|' + state.gameState + '|' + state.alliances.size + '|' + (state.treasures ? state.treasures.size : 0);
     for (const u of state.units.values()) s += ';' + u.id + ',' + u.x + ',' + u.y + ',' + u.stunned + ',' + (u.controller || 0) + ',' + u.civ;
     for (const c of state.civs.values()) {
       const t = c.tech || {};
@@ -362,8 +401,8 @@ const Render = (() => {
         for (let x = 0; x < map.w; x++) {
           if (vision.has(x + ',' + y)) continue;
           const [wx, wz] = worldPos(x, y);
-          // 차단층: 윗면 y=20 (산봉우리 18보다 높게)
-          dummy.position.set(wx, 7, wz);
+          // 차단층: 윗면 y=28 (고산 설봉 ~26보다 높게)
+          dummy.position.set(wx, 11, wz);
           dummy.scale.set(1, 1, 1);
           dummy.rotation.set(0, 0, 0);
           dummy.updateMatrix();
@@ -371,7 +410,7 @@ const Render = (() => {
           // 구름층: 타일별 결정적 지터로 뭉게뭉게
           const jr = ((x * 73856093) ^ (y * 19349663)) >>> 0;
           const r1 = (jr % 100) / 100, r2 = ((jr >> 7) % 100) / 100;
-          dummy.position.set(wx + (r1 - 0.5) * 7, 21.5 + r2 * 2.5, wz + (r2 - 0.5) * 7);
+          dummy.position.set(wx + (r1 - 0.5) * 7, 29.5 + r2 * 2.5, wz + (r2 - 0.5) * 7);
           dummy.scale.set(1.25 + r1 * 0.8, 0.5 + r2 * 0.35, 1.25 + r2 * 0.8);
           dummy.rotation.set(0, r1 * 3.1, 0);
           dummy.updateMatrix();
@@ -408,6 +447,80 @@ const Render = (() => {
 
     // 유닛·건물·경로·라벨
     disposeGroup(dynamicGroup);
+
+    // 내 동맹 그룹 영토 외곽선 (이어진 다각형 테두리)
+    if (state.you != null) {
+      const me = state.civs.get(state.you);
+      if (me) {
+        const pk2 = (a, b) => Math.min(a, b) + ':' + Math.max(a, b);
+        const groupIds = new Set([state.you]);
+        for (const c of state.civs.values()) {
+          if (c.id !== state.you && state.alliances.has(pk2(state.you, c.id))) groupIds.add(c.id);
+        }
+        const mine = new Set();
+        for (const [k, owner] of state.territory) if (groupIds.has(owner)) mine.add(k);
+        if (mine.size) {
+          const borderMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(me.color) });
+          const mapWW = HEX * SQRT3 * map.w;
+          const UP2 = new THREE.Vector3(0, 1, 0);
+          for (const k of mine) {
+            const [x, y] = k.split(',').map(Number);
+            const [wx, wz] = worldPos(x, y);
+            const ty2 = topY(map.rows[y][x]) + 1.8;
+            const corners = [];
+            for (let ci = 0; ci < 6; ci++) {
+              const a2 = Math.PI / 3 * ci;
+              corners.push([wx + HEX * Math.sin(a2), wz + HEX * Math.cos(a2)]);
+            }
+            for (const [nx, ny] of hexNeighbors(map, x, y)) {
+              if (mine.has(nx + ',' + ny)) continue; // 그룹 내부 경계는 생략
+              let [nwx, nwz] = worldPos(nx, ny);
+              if (nwx - wx > mapWW / 2) nwx -= mapWW;
+              else if (wx - nwx > mapWW / 2) nwx += mapWW;
+              const sorted = corners
+                .map((c2, i2) => [i2, (c2[0] - nwx) ** 2 + (c2[1] - nwz) ** 2])
+                .sort((p2, q2) => p2[1] - q2[1]);
+              const A2 = corners[sorted[0][0]], B2 = corners[sorted[1][0]];
+              const va = new THREE.Vector3(A2[0], ty2, A2[1]);
+              const vb = new THREE.Vector3(B2[0], ty2, B2[1]);
+              const dir = new THREE.Vector3().subVectors(vb, va);
+              const len = dir.length();
+              if (len < 0.01) continue;
+              const seg = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.2, len, 5), borderMat);
+              seg.position.copy(va).add(vb).multiplyScalar(0.5);
+              seg.quaternion.setFromUnitVectors(UP2, dir.normalize());
+              dynamicGroup.add(seg);
+            }
+          }
+        }
+      }
+    }
+
+    // 보물상자
+    if (state.treasures && state.treasures.size) {
+      for (const k of state.treasures) {
+        const [x, y] = k.split(',').map(Number);
+        if (!isVis(x, y)) continue;
+        const [wx, wz] = worldPos(x, y);
+        const ty3 = topY(map.rows[y][x]);
+        const chest = new THREE.Group();
+        const body = new THREE.Mesh(new THREE.BoxGeometry(7, 4.5, 5), mat(0x7a4a1f));
+        body.position.y = 2.25;
+        chest.add(body);
+        const lid = new THREE.Mesh(new THREE.BoxGeometry(7.4, 2, 5.4), mat(0x9c6a30));
+        lid.position.y = 5;
+        chest.add(lid);
+        const band = new THREE.Mesh(new THREE.BoxGeometry(7.6, 1, 1.4), mat(0xd4af37));
+        band.position.y = 3.2;
+        chest.add(band);
+        const glow = new THREE.Mesh(GEO.ring, new THREE.MeshBasicMaterial({ color: 0xd4af37, side: THREE.DoubleSide, transparent: true, opacity: 0.6 }));
+        glow.rotation.x = -Math.PI / 2;
+        glow.position.y = 0.7;
+        chest.add(glow);
+        chest.position.set(wx, ty3, wz);
+        dynamicGroup.add(chest);
+      }
+    }
 
     // 수도 (링 + 건물 + HP바)
     for (const civ of state.civs.values()) {

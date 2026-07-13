@@ -24,6 +24,9 @@
   #myCountry { font-weight: 700; }
   #myHud .sub { font-size: 12px; color: #94a3b8; margin-top: 4px; }
 
+  #spawnBtn { display: block; width: 100%; margin-top: 8px; padding: 6px 10px; font-size: 12px; font-weight: 700; color: #0b1220; background: #4ade80; border: 0; border-radius: 6px; cursor: pointer; }
+  #spawnBtn:hover { background: #86efac; }
+  #spawnBtn:disabled { background: #334155; color: #64748b; cursor: default; }
   #techHud h3, #playersHud h3, #chatHud h3 { font-size: 12px; color: #94a3b8; margin-bottom: 6px; font-weight: 600; }
   #techHud { margin-top: 10px; border-top: 1px solid #263450; padding-top: 8px; }
   .tech-btn { display: block; width: 100%; margin-top: 4px; padding: 5px 8px; font-size: 11.5px; text-align: left; color: #e2e8f0; background: #1e293b; border: 1px solid #334155; border-radius: 6px; cursor: pointer; }
@@ -41,6 +44,7 @@
   .ally-btn.accept { border-color: #4ade80; color: #4ade80; }
   .ally-btn.leave { border-color: #f87171; color: #f87171; }
   .tag-ally { flex: none; font-size: 10px; color: #4ade80; border: 1px solid #4ade80; border-radius: 4px; padding: 0 4px; }
+  .tag-nocontact { flex: none; font-size: 10px; color: #64748b; border: 1px solid #334155; border-radius: 4px; padding: 0 4px; }
   .delegate-sel { flex: none; font-size: 10.5px; background: #1e293b; color: #d8b4fe; border: 1px solid #7c3aed; border-radius: 5px; padding: 1px 2px; }
 
   #chatHud { bottom: 52px; right: 12px; width: 300px; padding: 8px 10px; }
@@ -67,6 +71,13 @@
   #lobbyHud h2 { font-size: 15px; color: #a78bfa; margin-bottom: 4px; }
   #lobbyHud p { font-size: 12px; color: #94a3b8; }
 
+  #treasureOverlay { position: fixed; inset: 0; background: rgba(5, 8, 16, .75); display: none; align-items: center; justify-content: center; z-index: 26; }
+  #treasureBox { text-align: center; background: #0f172a; border: 1px solid #d4af37; border-radius: 14px; padding: 26px 34px; max-width: 400px; }
+  #treasureBox h2 { font-size: 18px; color: #d4af37; margin-bottom: 8px; }
+  #treasureBox p { font-size: 13px; color: #e2e8f0; margin-bottom: 16px; }
+  .treasure-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .treasure-btn { padding: 9px; font-size: 13.5px; font-weight: 700; border: 1px solid #d4af37; border-radius: 8px; background: #1e293b; color: #ffe066; cursor: pointer; }
+  .treasure-btn:hover { background: #333f55; }
   #consentOverlay { position: fixed; inset: 0; background: rgba(5, 8, 16, .75); display: none; align-items: center; justify-content: center; z-index: 25; }
   #consentBox { text-align: center; background: #0f172a; border: 1px solid #4ade80; border-radius: 14px; padding: 26px 34px; max-width: 380px; }
   #consentBox h2 { font-size: 17px; color: #4ade80; margin-bottom: 10px; }
@@ -119,6 +130,7 @@
 <div id="myHud" class="hud" style="display:none">
   <div><span id="myFlag"></span><span id="myCountry"></span></div>
   <div class="sub" id="myInfo"></div>
+  <button id="spawnBtn">유닛 생산 (곡식10+돌10)</button>
   <div id="techHud">
     <h3>연구 (실행 턴에 완료)</h3>
     <button class="tech-btn" data-branch="military"></button>
@@ -162,6 +174,19 @@
   </div>
 </div>
 
+<div id="treasureOverlay">
+  <div id="treasureBox">
+    <h2>보물상자!</h2>
+    <p>고대의 지식이 담겨 있습니다. 올릴 기술 계통을 선택하세요.</p>
+    <div class="treasure-btns">
+      <button class="treasure-btn" data-branch="military">군사 +1</button>
+      <button class="treasure-btn" data-branch="defense">인구 +1</button>
+      <button class="treasure-btn" data-branch="gather">채집 +1</button>
+      <button class="treasure-btn" data-branch="move">이동 +1</button>
+    </div>
+  </div>
+</div>
+
 <div id="overOverlay">
   <div id="overBox">
     <h1 id="overTitle">게임 종료</h1>
@@ -171,7 +196,7 @@
 </div>
 
 <div id="resHud" class="hud" style="display:none"></div>
-<div id="helpHud" class="hud" style="display:none">클릭: 유닛 선택 → 목표 클릭: 이동, 연속 클릭: 웨이포인트 추가 (평지1/산2/바다3) · X: 취소 · ESC: 해제 · Enter: 채팅</div>
+<div id="helpHud" class="hud" style="display:none">클릭: 유닛 선택 → 목표 클릭: 이동, 연속 클릭: 웨이포인트 (평지1·구릉1.5·산2·고산3·바다3) · 금상자: 보물 · X: 취소 · Enter: 채팅</div>
 
 <div id="toast"></div>
 <div id="phaseBanner"></div>

@@ -5,9 +5,11 @@ const path = require('path');
 const TERRAIN = {
   '~': { name: 'sea', ko: '바다', resource: null },
   'g': { name: 'grass', ko: '초원', resource: 'grain' },
-  'p': { name: 'plains', ko: '평원', resource: 'meat' },
+  'p': { name: 'quarry', ko: '채석지', resource: 'stone' },
   'f': { name: 'forest', ko: '숲', resource: 'wood' },
+  'h': { name: 'hill', ko: '구릉', resource: 'iron' },
   'm': { name: 'mountain', ko: '산', resource: 'iron' },
+  'M': { name: 'highmountain', ko: '고산', resource: 'iron' },
 };
 
 class World {

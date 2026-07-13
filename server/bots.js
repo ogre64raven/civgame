@@ -1,7 +1,7 @@
 // 봇 AI — 회의 턴마다 실행: 연구 예약 + 유닛 이동 명령
 // 전략: 자원이 되면 가장 낮은 기술부터 연구, 유닛은 주변의 비소유 타일로 확장,
 //       군사 우위일 때만 적 수도를 노린다.
-const TECH_RES = { military: 'iron', defense: 'meat', gather: 'wood', move: 'grain' };
+const TECH_RES = { military: 'iron', defense: 'grain', gather: 'wood', move: 'stone' };
 const BRANCHES = ['military', 'defense', 'gather', 'move'];
 const techCost = (targetLevel) => 20 * targetLevel;
 
@@ -12,7 +12,7 @@ function runBots(game) {
     try {
       botResearch(game, civ);
       if (game.unitCountOf(civ.id) < game.maxUnits(civ) &&
-          civ.resources.meat >= 10 && civ.resources.grain >= 10) {
+          civ.resources.stone >= 10 && civ.resources.grain >= 10) {
         game.spawnOrder(civ.id);
       }
       botMoves(game, civ);
@@ -57,6 +57,7 @@ function findTarget(game, civ, u) {
         seen.add(k);
         next.push([nx, ny]);
         if (!world.isLand(nx, ny)) continue;
+        if (game.treasures && game.treasures.has(k)) return [nx, ny]; // 보물 우선
         const owner = game.territory.get(k);
         if (owner === civ.id) continue;
         if (owner != null && game.isAllied(owner, civ.id)) continue;

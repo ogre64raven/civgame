@@ -47,10 +47,13 @@ function isLandHex(x, y) {
   return hits >= 2;
 }
 
-// 지형: ~ 바다 / g 초원(곡식) / p 평원(고기) / f 숲(목재) / m 산(철)
+// 지형: ~ 바다 / g 초원(곡식) / p 채석지(돌) / f 숲(목재)
+//       h 구릉(철) / m 산(철) / M 고산(철)
 function terrainFor(x, y) {
   const r = hash(x, y);
-  if (r < 0.22) return 'm';
+  if (r < 0.10) return 'h';
+  if (r < 0.17) return 'm';
+  if (r < 0.22) return 'M';
   if (r < 0.47) return 'f';
   if (r < 0.74) return 'g';
   return 'p';

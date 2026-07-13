@@ -22,6 +22,8 @@ function newGame(n) {
   clearTimeout(game.timer);
   let i = 0;
   for (const u of game.units.values()) { [u.x, u.y] = isolated[i++]; }
+  // 테스트 편의: 전원 접촉 처리
+  for (const a of civs) for (const b of civs) if (a.id < b.id) game.contacts.add(a.id + ':' + b.id);
   return { game, civs };
 }
 const unitsOf = (g, id) => [...g.units.values()].filter(u => u.civ === id);
@@ -177,23 +179,31 @@ const key = (h) => h[0] + ',' + h[1];
   const { game, civs } = newGame(1);
   const A = civs[0];
   const u = unitsOf(game, A.id)[0];
-  const flat = ([px, py]) => world.isLand(px, py) && world.terrain(px, py) !== 'm';
   let mo = null;
   for (const cand of isolated) {
     const p = game.findPath(u.x, u.y, cand[0], cand[1]);
-    if (p && p.length >= 5 && p.every(flat)) {
-      mo = game.moveOrder(A.id, u.id, cand);
-      break;
-    }
+    if (p && p.length >= 4) { mo = game.moveOrder(A.id, u.id, cand); break; }
   }
   if (mo && mo.ok) {
+    // 이동력 3 예산을 지형 비용으로 시뮬레이션해 기대 위치 계산
+    const stepIdx = (startIdx) => {
+      let budget = 3, i = startIdx;
+      while (i < mo.path.length) {
+        const c = game.moveCost(mo.path[i][0], mo.path[i][1]);
+        if (c > budget) break;
+        budget -= c;
+        i++;
+      }
+      return i;
+    };
+    const i1 = stepIdx(0);
     game.resolveExecution();
-    check(u.x === mo.path[2][0] && u.y === mo.path[2][1], '평지 기본 이동력 3 (턴당 3칸)');
+    check(i1 > 0 && u.x === mo.path[i1 - 1][0] && u.y === mo.path[i1 - 1][1], `이동력 3 예산 소모 (1턴차 ${i1}칸)`);
+    const i2 = stepIdx(i1);
     game.resolveExecution();
-    const idx2 = Math.min(5, mo.path.length - 1);
-    check(u.x === mo.path[idx2][0] && u.y === mo.path[idx2][1], '2턴차에 6칸째(또는 끝) 도달');
+    check(u.x === mo.path[i2 - 1][0] && u.y === mo.path[i2 - 1][1], `2턴차에 ${i2}칸째 도달`);
   } else {
-    check(false, '평지 기본 이동력 3 (경로 탐색 실패)');
+    check(false, '이동력 예산 (경로 탐색 실패)');
   }
 }
 
@@ -267,8 +277,17 @@ const key = (h) => h[0] + ',' + h[1];
       if (!sea && t === '~') sea = [x, y];
     }
   check(game.moveCost(flat[0], flat[1]) === 1, '평지 이동 비용 1');
-  check(game.moveCost(mtn[0], mtn[1]) === 2, '산지 이동 비용 2');
+  check(game.moveCost(mtn[0], mtn[1]) === 2, '산 이동 비용 2');
   check(game.moveCost(sea[0], sea[1]) === 3, '바다 이동 비용 3');
+  let hill = null, high = null;
+  for (let y = 0; y < world.h && !(hill && high); y++)
+    for (let x = 0; x < world.w && !(hill && high); x++) {
+      const t2 = world.terrain(x, y);
+      if (!hill && t2 === 'h') hill = [x, y];
+      if (!high && t2 === 'M') high = [x, y];
+    }
+  check(hill && game.moveCost(hill[0], hill[1]) === 1.5, '구릉 이동 비용 1.5');
+  check(high && game.moveCost(high[0], high[1]) === 3, '고산 이동 비용 3');
 
   // 산 2연속 경로: 첫 턴에 1개(2)만 넘고 멈춤 (2+2 > 3)
   const A = game.civs.values().next().value;
@@ -310,7 +329,7 @@ const key = (h) => h[0] + ',' + h[1];
 {
   const { game, civs } = newGame(1);
   const A = game.civs.get(civs[0].id);
-  A.resources.meat = 30; A.resources.grain = 30;
+  A.resources.stone = 30; A.resources.grain = 30;
   // 기본 상한 3 → 생산 불가
   check(game.spawnOrder(A.id).reason === 'cap', '인구 Lv0: 상한 3에서 생산 거부');
   // 인구 Lv1 → 상한 4
@@ -321,15 +340,15 @@ const key = (h) => h[0] + ',' + h[1];
   check(r.births.length === 1, '실행 턴에 수도에서 유닛 생성');
   check(r.births[0].x === A.capital[0] && r.births[0].y === A.capital[1], '생성 위치 = 수도');
   check(unitsOf(game, A.id).length === 4, '유닛 4기 (3+1)');
-  check(A.resources.meat === 30 - 10 + (r.gains && 0 || 0) || A.resources.meat <= 21, '고기 10 차감');
+  check(A.resources.stone === 30 - 10 + (r.gains && 0 || 0) || A.resources.stone <= 21, '고기 10 차감');
   // 상한 재도달
   check(game.spawnOrder(A.id).reason === 'cap', 'Lv1 상한 4 재도달 → 거부');
   // 자원 부족
   A.tech.defense = 2;
-  A.resources.meat = 5;
+  A.resources.stone = 5;
   check(game.spawnOrder(A.id).reason === 'cost', '자원 부족 거부');
   // 예약 후 실행 시점 재검증 (자원 소진)
-  A.resources.meat = 10; A.resources.grain = 10;
+  A.resources.stone = 10; A.resources.grain = 10;
   game.spawnOrder(A.id);
   A.resources.grain = 0;
   const r2 = game.resolveExecution();

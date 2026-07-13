@@ -9,7 +9,7 @@ const check = (cond, label) => {
 };
 
 (async () => {
-  const server = await startServer(PORT, { PHASE_MEETING_MS: '600000', PHASE_EXEC_MS: '1000' });
+  const server = await startServer(PORT, { PHASE_MEETING_MS: '600000', PHASE_EXEC_MS: '1000', ALLY_NO_CONTACT_CHECK: '1' });
   try {
     const A = new Client('갑', PORT), B = new Client('을', PORT), C = new Client('병', PORT);
     await A.connect(); await B.connect(); await C.connect();

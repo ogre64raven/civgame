@@ -7,9 +7,11 @@
     territory: new Map(),  // 'x,y' -> civId
     myOrders: new Map(),
     selected: null,
-    resources: { meat: 0, grain: 0, wood: 0, iron: 0 },
+    resources: { stone: 0, grain: 0, wood: 0, iron: 0 },
     alliances: new Set(),
     proposals: new Set(),
+    contacts: new Set(),
+    treasures: new Set(),
     queuedResearch: null,
     you: null,
     gameState: 'LOBBY',
@@ -32,9 +34,11 @@
     already: '이미 동맹입니다', noproposal: '해당 제안이 없습니다',
     full: '동맹은 최대 3개국까지입니다', noconsent: '유효하지 않은 동의 요청입니다',
     notally: '동맹이 아닙니다', civ: '대상이 올바르지 않습니다',
+    nocontact: '아직 접촉하지 않은 문명입니다 — 유닛을 접근시키세요',
+    notreasure: '선택할 보물 효과가 없습니다',
   };
   const TECH_KO = { military: '군사', defense: '인구', gather: '채집', move: '이동' };
-  const TECH_RES_KO = { military: '철', defense: '고기', gather: '목재', move: '곡식' };
+  const TECH_RES_KO = { military: '철', defense: '곡식', gather: '목재', move: '돌' };
   const TECH_DESC = { military: '전투력 +1', defense: '유닛 상한 +1 · 내 영토 전투 +1', gather: '채취 +20%', move: '이동력 +1/3Lv (기본 3 · 평지1/산2/바다3)' };
   let ws;
   let orderChain = null; // 같은 선택 세션에서 연속 클릭 → 웨이포인트 연장
@@ -94,6 +98,8 @@
         state.spectator = !!msg.spectator;
         state.alliances = new Set((msg.alliances || []).map(([a, b]) => pairKey(a, b)));
         state.proposals = new Set(msg.proposals || []);
+        state.contacts = new Set(msg.contacts || []);
+        state.treasures = new Set((msg.treasures || []).map(([tx2, ty2]) => tx2 + ',' + ty2));
         if (msg.token) sessionStorage.setItem('civToken', msg.token);
         if (msg.you != null) state.you = msg.you;
         if (msg.resources) state.resources = msg.resources;
@@ -123,6 +129,7 @@
       }
       case 'gameStarted': {
         state.units = new Map((msg.units || []).map(u => [u.id, u]));
+        state.treasures = new Set((msg.treasures || []).map(([tx2, ty2]) => tx2 + ',' + ty2));
         state.territory = new Map();
         applyTerritory(msg.territory);
         state.phase = msg.phase; state.turn = msg.turn; state.endsAt = msg.endsAt;
@@ -223,6 +230,18 @@
           if (u) u.controller = d.controller;
           if (d.controller === state.you) toast(`점령국이 유닛 #${d.unitId}을 위임했습니다`);
         }
+        for (const ev of msg.treasures || []) {
+          state.treasures.delete(ev.x + ',' + ev.y);
+          if (ev.branch != null) { // 봇 자동 선택 포함 즉시 기술 반영
+            const c2 = state.civs.get(ev.by);
+            if (c2) c2.tech[ev.branch] = ev.level;
+          }
+          if (ev.by === state.you) {
+            toast(ev.kind === 'res' ? '보물상자 발견! 모든 자원 +20' : '보물상자 발견! 기술 계통을 선택하세요');
+          } else {
+            toast(`${civName(ev.by)}이(가) 보물상자를 발견했습니다`);
+          }
+        }
         for (const t of msg.techUpdates || []) {
           const c = state.civs.get(t.civId);
           if (c) c.tech[t.branch] = t.level;
@@ -272,6 +291,11 @@
       }
       case 'resources': {
         state.resources = msg.resources;
+        if (msg.contacts) {
+          const before = state.contacts.size;
+          state.contacts = new Set(msg.contacts);
+          if (state.contacts.size > before) renderPlayers();
+        }
         updateHud();
         break;
       }
@@ -285,7 +309,7 @@
         break;
       }
       case 'spawnAck': {
-        toast(`생산 예약 — 실행 턴에 수도에서 유닛 생성 (고기·곡식 ${msg.cost}씩)`);
+        toast(`생산 예약 — 실행 턴에 수도에서 유닛 생성 (곡식·돌 ${msg.cost}씩)`);
         break;
       }
       case 'spawnRejected':
@@ -323,6 +347,22 @@
         state.proposals.delete(b);
         if (a === state.you || b === state.you) toast(`동맹 성립: ${civName(a)} - ${civName(b)}`);
         renderPlayers();
+        break;
+      }
+      case 'treasureTechOffer': {
+        $('treasureOverlay').style.display = 'flex';
+        break;
+      }
+      case 'treasureRejected': {
+        toast('선택 실패: ' + (REASON_KO[msg.reason] || msg.reason));
+        $('treasureOverlay').style.display = 'flex'; // 다시 선택
+        break;
+      }
+      case 'techUpdate': {
+        const c = state.civs.get(msg.civId);
+        if (c) c.tech[msg.branch] = msg.level;
+        if (msg.civId === state.you) toast(`보물 효과 — ${TECH_KO[msg.branch]} Lv${msg.level}!`);
+        updateHud();
         break;
       }
       case 'allyConsentRequest': {
@@ -464,6 +504,20 @@
     }
   });
 
+  // 보물: 기술 계통 선택
+  for (const btn of document.querySelectorAll('.treasure-btn')) {
+    btn.addEventListener('click', () => {
+      $('treasureOverlay').style.display = 'none';
+      send({ type: 'treasure.choose', branch: btn.dataset.branch });
+    });
+  }
+
+  // 생산 버튼
+  $('spawnBtn').addEventListener('click', () => {
+    if (state.spectator || state.you == null || state.ended || state.gameState !== 'RUNNING') return;
+    send({ type: 'order.spawn' });
+  });
+
   for (const btn of document.querySelectorAll('.tech-btn')) {
     btn.addEventListener('click', () => {
       if (state.ended || state.gameState !== 'RUNNING') { toast('게임이 시작되면 연구할 수 있습니다'); return; }
@@ -479,13 +533,18 @@
     if (!me.alive) {
       const delegated = [...state.units.values()].filter(u => u.controller === state.you).length;
       $('myInfo').textContent = `점령됨 — ${civName(me.conqueredBy)} 예속 (위임 유닛 ${delegated}기)`;
+      $('spawnBtn').disabled = true;
     } else {
       const tiles = myTiles();
       const score = (me.tech.military + me.tech.defense + me.tech.gather + me.tech.move) + tiles;
-      $('myInfo').textContent = lobby ? '로비 대기 중' : `영토 ${tiles} · 점수 ${score}`;
+      const myUnits = [...state.units.values()].filter(u => u.civ === state.you).length;
+      const maxU = 3 + (me.tech.defense || 0);
+      $('myInfo').textContent = lobby ? '로비 대기 중' : `유닛 ${myUnits}/${maxU} · 영토 ${tiles} · 점수 ${score}`;
+      $('spawnBtn').disabled = lobby || myUnits >= maxU;
+      $('spawnBtn').textContent = `유닛 생산 ${myUnits}/${maxU} (곡식10+돌10)`;
     }
     const r = state.resources;
-    $('resHud').textContent = `고기 ${r.meat} · 곡식 ${r.grain} · 목재 ${r.wood} · 철 ${r.iron}`;
+    $('resHud').textContent = `돌 ${r.stone} · 곡식 ${r.grain} · 목재 ${r.wood} · 철 ${r.iron}`;
 
     for (const btn of document.querySelectorAll('.tech-btn')) {
       const br = btn.dataset.branch;
@@ -534,12 +593,17 @@
           btn.textContent = '수락';
           btn.onclick = () => send({ type: 'ally.accept', civId: c.id });
           row.append(btn);
-        } else {
+        } else if (state.contacts.has(c.id)) {
           const btn = document.createElement('button');
           btn.className = 'ally-btn';
           btn.textContent = '동맹';
           btn.onclick = () => send({ type: 'ally.propose', civId: c.id });
           row.append(btn);
+        } else {
+          const tag = document.createElement('span');
+          tag.className = 'tag-nocontact';
+          tag.textContent = '미접촉';
+          row.append(tag);
         }
       }
       // 내 예속국이면 위임 유닛 수(1~3) 선택
