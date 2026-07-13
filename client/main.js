@@ -41,6 +41,7 @@
   const TECH_RES_KO = { military: '철', defense: '곡식', gather: '목재', move: '돌' };
   const TECH_DESC = { military: '전투력 +1', defense: '유닛 상한 +1 · 내 영토 전투 +1', gather: '채취 +20%', move: '이동력 +1/3Lv (기본 3 · 평지1/산2/바다3)' };
   let ws;
+  let spectatePass = null; // 관리자 관전 모드
   let orderChain = null; // 같은 선택 세션에서 연속 클릭 → 웨이포인트 연장
 
   const isMine = (u) => u.civ === state.you || u.controller === state.you;
@@ -58,7 +59,8 @@
     const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
     ws = new WebSocket(proto + location.host);
     ws.onopen = () => {
-      ws.send(JSON.stringify({ type: 'join', name, token: sessionStorage.getItem('civToken') || undefined }));
+      if (spectatePass != null) ws.send(JSON.stringify({ type: 'spectate', pass: spectatePass }));
+      else ws.send(JSON.stringify({ type: 'join', name, token: sessionStorage.getItem('civToken') || undefined }));
     };
     ws.onmessage = (e) => handle(JSON.parse(e.data));
     ws.onclose = () => {
@@ -153,6 +155,11 @@
         for (const [k, v] of [...state.territory]) if (v === msg.civId) state.territory.delete(k);
         if (c) toast(`${c.name}이(가) 서버에서 제외되었습니다`);
         renderPlayers();
+        break;
+      }
+      case 'spectateRejected': {
+        alert('관리자 비밀번호가 올바르지 않습니다');
+        location.href = '/admin';
         break;
       }
       case 'kicked': {
@@ -718,4 +725,13 @@
     connect(name);
   });
   $('nameInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('joinBtn').click(); });
+
+  // 관리자 관전 모드: /?spectate=1 — 비밀번호는 URL 해시 → 저장값 → 입력 순으로 획득
+  if (new URLSearchParams(location.search).has('spectate')) {
+    $('joinOverlay').style.display = 'none';
+    spectatePass = decodeURIComponent(location.hash.slice(1)) ||
+      sessionStorage.getItem('adminPass') || prompt('관리자 비밀번호') || '';
+    history.replaceState(null, '', location.pathname + location.search);
+    connect(null);
+  }
 })();

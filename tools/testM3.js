@@ -374,6 +374,10 @@ const key = (h) => h[0] + ',' + h[1];
   [ua.x, ua.y] = isolated[39];
   game.resolveExecution();
   check(bCiv.capitalHp === 12, `공격 중단 → 회복 (HP ${bCiv.capitalHp})`);
+  // 최대 레벨(5) 계통마다 회복 +1
+  bCiv.tech.gather = 5; bCiv.tech.defense = 5; // 총합 13 → 최대 HP 18, 만렙 2계통
+  game.resolveExecution();
+  check(bCiv.capitalHp === 15, `만렙 2계통 → 턴당 3 회복 (HP ${bCiv.capitalHp})`);
 }
 
 console.log(fail === 0 ? '\n모든 테스트 통과' : `\n실패 ${fail}건`);

@@ -215,6 +215,15 @@ wss.on('connection', (ws) => {
         });
         break;
       }
+      case 'spectate': {
+        if (String(msg.pass || '') !== ADMIN_PASS) {
+          sendTo(ws, { type: 'spectateRejected' });
+          return;
+        }
+        ws.civId = null;
+        sendTo(ws, { type: 'welcome', spectator: true, map: world.toJSON(), ...game.snapshot() });
+        break;
+      }
       case 'order.move': {
         if (ws.civId == null) return;
         const r = game.moveOrder(ws.civId, msg.unitId, msg.target, !!msg.append);

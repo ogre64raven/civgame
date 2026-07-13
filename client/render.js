@@ -75,6 +75,31 @@ const Render = (() => {
     }
     const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false }));
     sp.scale.set(worldH * 4, worldH, 1);
+    sp.renderOrder = 999;
+    return sp;
+  }
+
+  // 유닛 위치 핀 — 산/수도 건물에 가려져도 항상 보이는 문명색 표식
+  const pinCache = new Map();
+  function pinSprite(color) {
+    let tex = pinCache.get(color);
+    if (!tex) {
+      const c = document.createElement('canvas');
+      c.width = 64; c.height = 64;
+      const g = c.getContext('2d');
+      g.beginPath();
+      g.moveTo(32, 58); g.lineTo(11, 18); g.lineTo(53, 18); g.closePath();
+      g.fillStyle = color;
+      g.fill();
+      g.lineWidth = 5;
+      g.strokeStyle = 'rgba(0,0,0,.7)';
+      g.stroke();
+      tex = new THREE.CanvasTexture(c);
+      pinCache.set(color, tex);
+    }
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false }));
+    sp.renderOrder = 998;
+    sp.scale.set(4.4, 4.4, 1);
     return sp;
   }
 
@@ -593,6 +618,9 @@ const Render = (() => {
       if (!isVis(x, y)) continue;
       const [wx, wz] = worldPos(x, y);
       const ty = topY(map.rows[y][x]);
+      const hasCapital = [...state.civs.values()].some(
+        c => c.capital && c.capital[0] === x && c.capital[1] === y);
+      const wzU = wz + (hasCapital ? HEX * 0.62 : 0);
       const byCiv = new Map();
       for (const u of units) {
         if (!byCiv.has(u.civ)) byCiv.set(u.civ, []);
@@ -605,12 +633,15 @@ const Render = (() => {
         if (!civ) { gi++; continue; }
         const gx = wx + (gi - (n - 1) / 2) * HEX * 0.75;
         const fig = makeFigure(civ.color, (civ.tech && civ.tech.military) || 0);
-        fig.position.set(gx, ty, wz);
+        fig.position.set(gx, ty, wzU);
         const allStunned = group.every(u => u.stunned > 0);
         if (allStunned) fig.traverse(o => { if (o.material) { o.material = o.material.clone(); o.material.transparent = true; o.material.opacity = 0.45; } });
         dynamicGroup.add(fig);
+        const pin = pinSprite(civ.color);
+        pin.position.set(gx, ty + 10.5, wzU);
+        dynamicGroup.add(pin);
         const code = textSprite(civ.code + (group.length > 1 ? ' ×' + group.length : ''), '#e2e8f0', 5);
-        code.position.set(gx, ty + 14, wz);
+        code.position.set(gx, ty + 14, wzU);
         dynamicGroup.add(code);
         gi++;
       }

@@ -361,7 +361,9 @@ class Game {
       const max = this.maxCapitalHp(civ);
       if (attackers.size === 0) {
         if (civ.capitalHp < max) {
-          civ.capitalHp = Math.min(max, civ.capitalHp + 1);
+          // 회복량 = 기본 1 + 최대 레벨(5) 도달 계통 수
+          const regen = 1 + Object.values(civ.tech).filter(l => l >= TECH_MAX).length;
+          civ.capitalHp = Math.min(max, civ.capitalHp + regen);
           capitalHits.push({ civId: civ.id, hp: civ.capitalHp, max });
         }
         continue;

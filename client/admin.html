@@ -56,6 +56,7 @@
     <div class="row">
       <button id="startBtn" class="green">게임 시작</button>
       <button id="botBtn">봇 추가</button>
+      <button id="specBtn">맵 관전</button>
       <button id="resetBtn" class="red">게임 리셋 (로비로)</button>
     </div>
     <div id="actionMsg" style="font-size:12.5px;color:#fbbf24;min-height:18px"></div>
@@ -167,6 +168,7 @@ $('botBtn').onclick = async () => {
   $('actionMsg').textContent = r.ok ? '봇 추가: ' + (r.name || '') : '봇 추가 실패 (' + (r.reason || r.error || '') + ')';
   poll();
 };
+$('specBtn').onclick = () => window.open('/?spectate=1#' + encodeURIComponent(PASS), '_blank');
 $('resetBtn').onclick = async () => {
   if (!confirm('게임을 리셋하고 모든 플레이어를 내보낼까요?')) return;
   await api('POST', '/api/admin/reset');
