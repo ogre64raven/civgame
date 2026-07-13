@@ -18,10 +18,10 @@ for (let y = 2; y < world.h - 2 && isolated.length < 40; y += 3)
 
 function newGame(n) {
   const game = new Game(world, () => {});
-  clearTimeout(game.timer);
   const civs = [];
   for (let i = 0; i < n; i++) civs.push(game.join(undefined, 'P' + (i + 1)).civ);
-  // 모든 유닛을 격리 헥스에 분산 배치
+  game.startGame();          // 로비 → 진행 (유닛 스폰)
+  clearTimeout(game.timer);  // 실제 타이머는 사용 안 함
   let i = 0;
   for (const u of game.units.values()) { [u.x, u.y] = isolated[i++]; }
   return { game, civs };
@@ -39,13 +39,11 @@ const unitsOf = (g, id) => [...g.units.values()].filter(u => u.civ === id);
   check(r.deaths.length === 0 && r.battles.length === 1, '동률 전투: 사망 없음');
   check(ua.stunned === 2 && ub.stunned === 2, '동률 전투: 양측 2턴 행동불능');
 
-  // 스턴 중 이동 불가 → 2턴 후 회복
   game.moveOrder(A.id, ua.id, [world.neighbors(hex[0], hex[1]).find(([x, y]) => world.isLand(x, y)) || hex].flat().slice(0, 2));
   const r2 = game.resolveExecution();
   check(!r2.moves.some(m => m.unitId === ua.id), '스턴 1턴차: 이동 불가');
   const r3 = game.resolveExecution();
   check(!r3.moves.some(m => m.unitId === ua.id), '스턴 2턴차: 이동 불가');
-  // 3턴차: B 유닛을 치워서 순수 이동 확인
   [ub.x, ub.y] = isolated[21];
   const r4 = game.resolveExecution();
   check(r4.moves.some(m => m.unitId === ua.id), '스턴 해제 후 이동 재개');
@@ -68,8 +66,8 @@ const unitsOf = (g, id) => [...g.units.values()].filter(u => u.civ === id);
 // ── 3. 기술 우위 + 점령 + 위임 (3인: 점령해도 게임이 끝나지 않도록)
 {
   const { game, civs } = newGame(3);
-  const [A, B] = civs; // C는 격리 상태로 생존만
-  game.civs.get(A.id).tech.military = 2; // B는 3기(수 우위 +1)이므로 2 이상이어야 단독 승리
+  const [A, B] = civs;
+  game.civs.get(A.id).tech.military = 2;
   const hex = isolated[23];
   const aUnits = unitsOf(game, A.id);
   for (const u of unitsOf(game, B.id)) { [u.x, u.y] = hex; }
@@ -83,7 +81,6 @@ const unitsOf = (g, id) => [...g.units.values()].filter(u => u.civ === id);
   check(!!delegated && delegated.civ === A.id, '점령국 유닛 1기 위임');
   check(r.conquests.length === 1 && r.delegations.length === 1, '점령·위임 브로드캐스트 데이터');
 
-  // 위임 유닛 명령 권한
   const nb = world.neighbors(delegated.x, delegated.y).find(([x, y]) => world.isLand(x, y));
   if (nb) {
     check(game.moveOrder(B.id, delegated.id, nb).ok === true, '예속국: 위임 유닛 이동 가능');
@@ -92,7 +89,6 @@ const unitsOf = (g, id) => [...g.units.values()].filter(u => u.civ === id);
   check(game.moveOrder(B.id, otherA.id, [otherA.x, otherA.y]).ok === false, '예속국: 다른 유닛 명령 불가');
   check(game.spawnOrder(B.id, [delegated.x, delegated.y]).reason === 'dead', '예속국: 생산 불가');
 
-  // 위임 유닛 사망 → 재위임
   game._delegations = [];
   game.killUnit(delegated.id);
   const re = [...game.units.values()].find(u => u.controller === B.id);

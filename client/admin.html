@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>온라인 문명 — 관리자</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0b1220; color: #e2e8f0; font-family: 'Segoe UI', 'Malgun Gothic', sans-serif; padding: 24px; }
+  h1 { font-size: 20px; margin-bottom: 16px; }
+  .card { background: #0f172a; border: 1px solid #263450; border-radius: 12px; padding: 16px 20px; margin-bottom: 16px; max-width: 760px; }
+  .card h2 { font-size: 14px; color: #94a3b8; margin-bottom: 10px; font-weight: 600; }
+  input, select { background: #1e293b; color: #e2e8f0; border: 1px solid #334155; border-radius: 6px; padding: 7px 10px; font-size: 13px; outline: none; }
+  input:focus { border-color: #38bdf8; }
+  button { padding: 7px 14px; font-size: 13px; font-weight: 700; border: 0; border-radius: 6px; cursor: pointer; color: #0b1220; background: #38bdf8; }
+  button:hover { filter: brightness(1.15); }
+  button.green { background: #4ade80; }
+  button.red { background: #f87171; }
+  button.small { padding: 3px 10px; font-size: 11.5px; }
+  button:disabled { background: #334155; color: #64748b; cursor: default; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+  .stat { display: inline-block; margin-right: 18px; font-size: 14px; }
+  .stat b { color: #7dd3fc; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid #1e293b; }
+  th { color: #94a3b8; font-weight: 600; font-size: 12px; }
+  .dead { opacity: .5; }
+  .off { color: #64748b; }
+  #msg { font-size: 12.5px; color: #fbbf24; min-height: 18px; margin-top: 6px; }
+  label { font-size: 12.5px; color: #94a3b8; }
+  .state-LOBBY { color: #7dd3fc; } .state-RUNNING { color: #4ade80; } .state-ENDED { color: #f87171; }
+</style>
+</head>
+<body>
+<h1>온라인 문명 — 서버 관리</h1>
+
+<div class="card" id="loginCard">
+  <h2>관리자 인증</h2>
+  <div class="row">
+    <input id="pass" type="password" placeholder="관리자 비밀번호" style="width:220px">
+    <button id="loginBtn">접속</button>
+  </div>
+  <div id="msg"></div>
+</div>
+
+<div id="panel" style="display:none">
+  <div class="card">
+    <h2>게임 상태</h2>
+    <div style="margin-bottom:10px">
+      <span class="stat">상태 <b id="stState">-</b></span>
+      <span class="stat">턴 <b id="stTurn">-</b></span>
+      <span class="stat">페이즈 <b id="stPhase">-</b></span>
+      <span class="stat">참가 <b id="stPlayers">-</b></span>
+      <span class="stat">관전 <b id="stSpect">-</b></span>
+    </div>
+    <div class="row">
+      <button id="startBtn" class="green">게임 시작</button>
+      <button id="resetBtn" class="red">게임 리셋 (로비로)</button>
+    </div>
+    <div id="actionMsg" style="font-size:12.5px;color:#fbbf24;min-height:18px"></div>
+  </div>
+
+  <div class="card">
+    <h2>설정 (진행 중에는 다음 페이즈부터 적용)</h2>
+    <div class="row">
+      <label>회의 턴(초) <input id="setMeeting" type="number" min="5" max="300" style="width:70px"></label>
+      <label>실행 턴(초) <input id="setExec" type="number" min="2" max="120" style="width:70px"></label>
+      <label>턴 제한 <input id="setLimit" type="number" min="10" max="1000" style="width:70px"></label>
+      <button id="setBtn">적용</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>플레이어</h2>
+    <table>
+      <thead><tr><th>국가</th><th>플레이어</th><th>유닛</th><th>점수</th><th>상태</th><th></th></tr></thead>
+      <tbody id="playerRows"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let PASS = sessionStorage.getItem('adminPass') || '';
+let pollTimer = null;
+
+async function api(method, url, body) {
+  const res = await fetch(url, {
+    method,
+    headers: { 'x-admin-pass': PASS, 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (res.status === 401) throw new Error('auth');
+  return res.json();
+}
+
+async function login() {
+  PASS = $('pass').value;
+  try {
+    await api('POST', '/api/admin/login');
+    sessionStorage.setItem('adminPass', PASS);
+    $('loginCard').style.display = 'none';
+    $('panel').style.display = '';
+    poll();
+    pollTimer = setInterval(poll, 2000);
+  } catch {
+    $('msg').textContent = '비밀번호가 올바르지 않습니다';
+  }
+}
+
+let settingsLoaded = false;
+async function poll() {
+  let s;
+  try { s = await api('GET', '/api/admin/state'); }
+  catch { clearInterval(pollTimer); $('panel').style.display = 'none'; $('loginCard').style.display = ''; return; }
+
+  $('stState').textContent = s.state;
+  $('stState').className = 'state-' + s.state;
+  $('stTurn').textContent = s.turn + '/' + s.settings.turnLimit;
+  $('stPhase').textContent = s.phase === 'MEETING' ? '회의' : s.phase === 'EXECUTION' ? '실행' : s.phase;
+  $('stPlayers').textContent = s.playerCount + '/30';
+  $('stSpect').textContent = s.spectators;
+  $('startBtn').disabled = s.state !== 'LOBBY' || s.playerCount === 0;
+
+  if (!settingsLoaded) {
+    $('setMeeting').value = Math.round(s.settings.meetingMs / 1000);
+    $('setExec').value = Math.round(s.settings.execMs / 1000);
+    $('setLimit').value = s.settings.turnLimit;
+    settingsLoaded = true;
+  }
+
+  const tb = $('playerRows');
+  tb.innerHTML = '';
+  for (const p of s.players) {
+    const tr = document.createElement('tr');
+    if (!p.alive) tr.className = 'dead';
+    const status = !p.alive ? '예속' : p.connected ? '접속 중' : '오프라인';
+    tr.innerHTML = `<td>${p.name} (${p.code})</td><td>${p.player}</td><td>${p.units}</td><td>${p.score}</td>` +
+      `<td class="${p.connected ? '' : 'off'}">${status}</td>`;
+    const td = document.createElement('td');
+    const btn = document.createElement('button');
+    btn.className = 'small red';
+    btn.textContent = '강퇴';
+    btn.onclick = async () => {
+      if (!confirm(p.name + ' (' + p.player + ') 강퇴할까요?')) return;
+      await api('POST', '/api/admin/kick', { civId: p.id });
+      poll();
+    };
+    td.append(btn);
+    tr.append(td);
+    tb.append(tr);
+  }
+}
+
+$('loginBtn').onclick = login;
+$('pass').addEventListener('keydown', (e) => { if (e.key === 'Enter') login(); });
+
+$('startBtn').onclick = async () => {
+  const r = await api('POST', '/api/admin/start');
+  $('actionMsg').textContent = r.ok ? '게임을 시작했습니다' : '시작 실패: ' + (r.reason || '');
+  poll();
+};
+$('resetBtn').onclick = async () => {
+  if (!confirm('게임을 리셋하고 모든 플레이어를 내보낼까요?')) return;
+  await api('POST', '/api/admin/reset');
+  $('actionMsg').textContent = '리셋 완료 — 새 로비가 열렸습니다';
+  settingsLoaded = false;
+  poll();
+};
+$('setBtn').onclick = async () => {
+  const r = await api('POST', '/api/admin/settings', {
+    meetingMs: $('setMeeting').value * 1000,
+    execMs: $('setExec').value * 1000,
+    turnLimit: $('setLimit').value,
+  });
+  $('actionMsg').textContent = '설정 적용: 회의 ' + r.settings.meetingMs / 1000 + '초 / 실행 ' +
+    r.settings.execMs / 1000 + '초 / ' + r.settings.turnLimit + '턴';
+};
+
+if (PASS) { $('pass').value = PASS; login(); }
+</script>
+</body>
+</html>

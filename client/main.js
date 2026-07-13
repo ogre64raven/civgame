@@ -1,4 +1,4 @@
-// 접속·상태 동기화·HUD·유닛 명령·연구·외교·채팅
+// 접속·로비·상태 동기화·HUD·유닛 명령·연구·외교·채팅
 (() => {
   const state = {
     map: null,
@@ -7,11 +7,12 @@
     myOrders: new Map(),
     selected: null,
     resources: { meat: 0, grain: 0, wood: 0, iron: 0 },
-    alliances: new Set(),  // 'minId:maxId'
+    alliances: new Set(),
     proposals: new Set(),
     queuedResearch: null,
     you: null,
-    phase: 'MEETING',
+    gameState: 'LOBBY',   // LOBBY | RUNNING | ENDED
+    phase: 'LOBBY',
     turn: 1,
     turnLimit: 120,
     endsAt: 0,
@@ -22,7 +23,7 @@
 
   const $ = (id) => document.getElementById(id);
   const REASON_KO = {
-    phase: '회의 턴에만 명령할 수 있습니다', unit: '내 유닛이 아닙니다',
+    phase: '지금은 명령할 수 없습니다 (회의 턴에만 가능)', unit: '내 유닛이 아닙니다',
     target: '이동할 수 없는 지형입니다', path: '길이 없습니다 (바다로 막힘)',
     cap: '인구 상한(12기)에 도달했습니다', cost: '자원이 부족합니다',
     nounit: '해당 헥스에 내 유닛이 없습니다', dead: '점령된 문명은 사용할 수 없습니다',
@@ -57,6 +58,11 @@
 
   function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
 
+  function setGameState(s) {
+    state.gameState = s;
+    $('lobbyHud').style.display = (s === 'LOBBY' && !state.spectator) ? '' : 'none';
+  }
+
   function handle(msg) {
     switch (msg.type) {
       case 'welcome': {
@@ -80,7 +86,7 @@
         $('chatHud').style.display = '';
         if (state.spectator) {
           $('chatForm').style.display = 'none';
-          toast('정원(30명)이 가득 차 관전자로 입장했습니다');
+          toast('관전자로 입장했습니다');
         } else {
           const me = state.civs.get(state.you);
           $('myHud').style.display = '';
@@ -91,8 +97,44 @@
           Render.centerOn(me.capital[0], me.capital[1]);
           toast(`당신은 ${me.name}입니다!`);
         }
+        setGameState(msg.state || 'RUNNING');
         updateHud();
         renderPlayers();
+        break;
+      }
+      case 'gameStarted': {
+        state.units = new Map((msg.units || []).map(u => [u.id, u]));
+        state.phase = msg.phase; state.turn = msg.turn; state.endsAt = msg.endsAt;
+        setGameState('RUNNING');
+        if (!state.spectator && state.you != null) {
+          const me = state.civs.get(state.you);
+          if (me) Render.centerOn(me.capital[0], me.capital[1]);
+        }
+        toast('게임 시작! 회의 턴에 유닛에게 명령을 내리세요');
+        updateHud();
+        break;
+      }
+      case 'civKicked': {
+        const c = state.civs.get(msg.civId);
+        state.civs.delete(msg.civId);
+        for (const u of [...state.units.values()]) {
+          if (u.civ === msg.civId) state.units.delete(u.id);
+          else if (u.controller === msg.civId) u.controller = null;
+        }
+        if (c) toast(`${c.name}이(가) 서버에서 제외되었습니다`);
+        renderPlayers();
+        break;
+      }
+      case 'kicked': {
+        state.ended = true;
+        sessionStorage.removeItem('civToken');
+        alert('관리자에 의해 게임에서 제외되었습니다.');
+        location.reload();
+        break;
+      }
+      case 'reset': {
+        sessionStorage.removeItem('civToken');
+        location.reload();
         break;
       }
       case 'civJoined': {
@@ -115,6 +157,7 @@
       }
       case 'phase': {
         state.phase = msg.phase; state.turn = msg.turn; state.endsAt = msg.endsAt;
+        if (state.gameState === 'LOBBY') setGameState('RUNNING');
         if (msg.phase === 'MEETING') state.queuedResearch = null;
         updateHud();
         break;
@@ -264,6 +307,7 @@
       }
       case 'gameover': {
         state.ended = true;
+        setGameState('ENDED');
         showGameover(msg);
         break;
       }
@@ -306,9 +350,7 @@
     const sel = $('chatTo');
     const cur = sel.value;
     sel.innerHTML = '';
-    const optAll = new Option('전체', 'all');
-    const optAlly = new Option('동맹', 'ally');
-    sel.append(optAll, optAlly);
+    sel.append(new Option('전체', 'all'), new Option('동맹', 'ally'));
     for (const c of state.civs.values()) {
       if (c.id === state.you) continue;
       sel.append(new Option('→' + c.name, String(c.id)));
@@ -316,9 +358,9 @@
     if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
   }
 
-  // ── 헥스 클릭: 내 유닛 선택 → 목표 클릭 시 이동 명령
+  // ── 헥스 클릭
   window.addEventListener('hexclick', (e) => {
-    if (state.spectator || state.you == null || state.ended) return;
+    if (state.spectator || state.you == null || state.ended || state.gameState !== 'RUNNING') return;
     const [hx, hy] = e.detail;
     const myUnitsHere = [...state.units.values()].filter(u => isMine(u) && u.x === hx && u.y === hy);
 
@@ -339,7 +381,7 @@
   });
 
   function requestSpawn() {
-    if (state.spectator || state.you == null || state.ended) return;
+    if (state.spectator || state.you == null || state.ended || state.gameState !== 'RUNNING') return;
     const me = state.civs.get(state.you);
     if (me && !me.alive) { toast(REASON_KO.dead); return; }
     let hex = null;
@@ -356,7 +398,7 @@
   }
 
   window.addEventListener('keydown', (e) => {
-    if (typing()) return; // 채팅 입력 중엔 단축키 무시
+    if (typing()) return;
     if (e.key === 'Escape') state.selected = null;
     if (e.key === 'x' && state.selected != null) {
       send({ type: 'order.stop', unitId: state.selected });
@@ -370,10 +412,9 @@
   });
   $('spawnBtn').addEventListener('click', requestSpawn);
 
-  // 연구 버튼
   for (const btn of document.querySelectorAll('.tech-btn')) {
     btn.addEventListener('click', () => {
-      if (state.ended) return;
+      if (state.ended || state.gameState !== 'RUNNING') { toast('게임이 시작되면 연구할 수 있습니다'); return; }
       send({ type: 'order.research', branch: btn.dataset.branch });
     });
   }
@@ -382,6 +423,7 @@
     if (state.you == null) return;
     const me = state.civs.get(state.you);
     if (!me) return;
+    const lobby = state.gameState === 'LOBBY';
     if (!me.alive) {
       const delegated = [...state.units.values()].filter(u => u.controller === state.you).length;
       $('myInfo').textContent = `점령됨 — ${civName(me.conqueredBy)} 예속 (위임 유닛 ${delegated}기)`;
@@ -389,8 +431,8 @@
     } else {
       const myCount = [...state.units.values()].filter(u => u.civ === state.you).length;
       const score = (me.tech.military + me.tech.gather + me.tech.move + me.tech.growth) + myCount;
-      $('myInfo').textContent = `인구 ${myCount}/12 · 점수 ${score}`;
-      $('spawnBtn').disabled = false;
+      $('myInfo').textContent = lobby ? '로비 대기 중' : `인구 ${myCount}/12 · 점수 ${score}`;
+      $('spawnBtn').disabled = lobby;
     }
     const r = state.resources;
     $('resHud').textContent = `고기 ${r.meat} · 곡식 ${r.grain} · 목재 ${r.wood} · 철 ${r.iron}`;
@@ -402,7 +444,7 @@
       btn.textContent = maxed
         ? `${TECH_KO[br]} Lv${lvl} (최고)`
         : `${TECH_KO[br]} Lv${lvl} → ${lvl + 1} (${TECH_RES_KO[br]} ${10 * (lvl + 1)})`;
-      btn.disabled = maxed || !me.alive || state.spectator;
+      btn.disabled = maxed || !me.alive || state.spectator || lobby;
       btn.classList.toggle('queued', state.queuedResearch === br);
     }
   }
@@ -411,6 +453,7 @@
     $('playerCount').textContent = state.civs.size;
     $('playerList').innerHTML = '';
     const meAlive = state.you != null && state.civs.get(state.you)?.alive;
+    const running = state.gameState === 'RUNNING';
     for (const c of state.civs.values()) {
       const row = document.createElement('div');
       row.className = 'player-row' + (c.connected ? '' : ' off');
@@ -423,7 +466,7 @@
       nm.textContent = `${c.name}${vassal} · ${c.player}${c.id === state.you ? ' (나)' : ''}`;
       row.append(dot, nm);
 
-      if (state.you != null && c.id !== state.you && !state.spectator && meAlive && c.alive && !state.ended) {
+      if (running && state.you != null && c.id !== state.you && !state.spectator && meAlive && c.alive && !state.ended) {
         if (isAlly(c.id)) {
           const tag = document.createElement('span');
           tag.className = 'tag-ally';
@@ -487,14 +530,20 @@
   // 페이즈 HUD + 렌더 루프
   function frame() {
     if (state.map) {
-      const remain = Math.max(0, Math.ceil((state.endsAt - Date.now()) / 1000));
-      $('turnLabel').textContent = `턴 ${state.turn}/${state.turnLimit}`;
       const pn = $('phaseName');
-      if (state.ended) {
+      if (state.gameState === 'LOBBY') {
+        $('turnLabel').textContent = `참가 ${state.civs.size}/30`;
+        pn.textContent = '로비';
+        pn.className = 'lobby';
+        $('phaseTimer').textContent = '대기';
+      } else if (state.ended) {
+        $('turnLabel').textContent = `턴 ${state.turn}/${state.turnLimit}`;
         pn.textContent = '게임 종료';
         pn.className = '';
         $('phaseTimer').textContent = '-';
       } else {
+        const remain = Math.max(0, Math.ceil((state.endsAt - Date.now()) / 1000));
+        $('turnLabel').textContent = `턴 ${state.turn}/${state.turnLimit}`;
         pn.textContent = state.phase === 'MEETING' ? '회의 턴' : '실행 턴';
         pn.className = state.phase === 'MEETING' ? 'meeting' : 'execution';
         $('phaseTimer').textContent = remain;

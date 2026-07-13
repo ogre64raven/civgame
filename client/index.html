@@ -15,6 +15,7 @@
   #phaseName { font-size: 15px; font-weight: 700; }
   #phaseName.meeting { color: #7dd3fc; }
   #phaseName.execution { color: #fbbf24; }
+  #phaseName.lobby { color: #a78bfa; }
   #phaseTimer { font-size: 26px; font-weight: 800; font-variant-numeric: tabular-nums; }
   #turnLabel { font-size: 12px; color: #94a3b8; }
 
@@ -64,6 +65,10 @@
   #joinBtn:hover { background: #7dd3fc; }
   #joinMsg { margin-top: 10px; font-size: 12px; color: #f87171; min-height: 16px; }
 
+  #lobbyHud { top: 70px; left: 50%; transform: translateX(-50%); text-align: center; min-width: 300px; border-color: #a78bfa; }
+  #lobbyHud h2 { font-size: 15px; color: #a78bfa; margin-bottom: 4px; }
+  #lobbyHud p { font-size: 12px; color: #94a3b8; }
+
   #overOverlay { position: fixed; inset: 0; background: rgba(5, 8, 16, .9); display: none; align-items: center; justify-content: center; z-index: 20; }
   #overBox { text-align: center; background: #0f172a; border: 1px solid #263450; border-radius: 16px; padding: 36px 48px; max-height: 80vh; overflow-y: auto; }
   #overBox h1 { font-size: 26px; margin-bottom: 8px; }
@@ -85,6 +90,11 @@
   <div id="turnLabel">턴 1</div>
   <div id="phaseName" class="meeting">회의 턴</div>
   <div id="phaseTimer">30</div>
+</div>
+
+<div id="lobbyHud" class="hud" style="display:none">
+  <h2>로비 대기 중</h2>
+  <p>관리자가 게임을 시작하면 유닛이 배치됩니다.<br>맵을 둘러보며 기다려 주세요.</p>
 </div>
 
 <div id="myHud" class="hud" style="display:none">

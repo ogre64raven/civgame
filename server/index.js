@@ -1,4 +1,4 @@
-// HTTP 정적 서빙 + WebSocket 게임 서버
+// HTTP 정적 서빙 + 관리자 API + WebSocket 게임 서버
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -7,22 +7,12 @@ const { World } = require('./world');
 const { Game } = require('./game');
 
 const PORT = process.env.PORT || 3000;
+const ADMIN_PASS = process.env.ADMIN_PASSWORD || 'admin1234';
 const CLIENT_DIR = path.join(__dirname, '../client');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.png': 'image/png', '.ico': 'image/x-icon' };
 
-const server = http.createServer((req, res) => {
-  let p = req.url.split('?')[0];
-  if (p === '/') p = '/index.html';
-  const file = path.join(CLIENT_DIR, path.normalize(p));
-  if (!file.startsWith(CLIENT_DIR)) { res.writeHead(403); return res.end(); }
-  fs.readFile(file, (err, data) => {
-    if (err) { res.writeHead(404); return res.end('Not Found'); }
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
-    res.end(data);
-  });
-});
-
-const wss = new WebSocketServer({ server });
+const world = new World();
+let game;
 
 function broadcast(msg) {
   const s = JSON.stringify(msg);
@@ -36,32 +26,122 @@ function wsOfCiv(civId) {
   return null;
 }
 
-const world = new World();
-const game = new Game(world, broadcast);
+function makeGame() {
+  const g = new Game(world, broadcast);
+  g.onExec = (result) => {
+    broadcast({
+      type: 'exec', turn: g.turn,
+      moves: result.moves, battles: result.battles, deaths: result.deaths,
+      stuns: result.stuns, births: result.births, conquests: result.conquests,
+      delegations: result.delegations, techUpdates: result.techUpdates,
+      allyLeft: result.allyLeft, absorptions: result.absorptions, scores: result.scores,
+    });
+    for (const c of wss.clients) {
+      if (c.readyState !== 1 || c.civId == null) continue;
+      const civ = g.civs.get(c.civId);
+      if (!civ) continue;
+      sendTo(c, { type: 'resources', resources: civ.resources, gained: result.gains[c.civId] || null });
+      const sf = result.spawnFails.find(f => f.civId === c.civId);
+      if (sf) sendTo(c, { type: 'spawnFailed', reason: sf.reason });
+      const rf = result.researchFails.find(f => f.civId === c.civId);
+      if (rf) sendTo(c, { type: 'researchFailed', reason: rf.reason });
+    }
+    if (result.gameover) broadcast({ type: 'gameover', ...result.gameover });
+  };
+  return g;
+}
 
-// 실행 턴 결과: 공개 정보는 브로드캐스트, 자원·실패 통지는 각자에게만
-game.onExec = (result) => {
-  broadcast({
-    type: 'exec', turn: game.turn,
-    moves: result.moves, battles: result.battles, deaths: result.deaths,
-    stuns: result.stuns, births: result.births, conquests: result.conquests,
-    delegations: result.delegations, techUpdates: result.techUpdates,
-    allyLeft: result.allyLeft, absorptions: result.absorptions, scores: result.scores,
+// ── 관리자 API
+function adminState() {
+  return {
+    state: game.state, phase: game.phase, turn: game.turn,
+    endsAt: game.phaseEnds, settings: game.settings,
+    playerCount: game.civs.size,
+    players: [...game.civs.values()].map(c => ({
+      id: c.id, name: c.name, code: c.code, player: c.player,
+      connected: c.connected, alive: c.alive, conqueredBy: c.conqueredBy,
+      units: game.unitCountOf(c.id), score: game.score(c),
+    })),
+    spectators: [...wss.clients].filter(c => c.readyState === 1 && c.civId == null).length,
+    eligibleCountries: game.pool.length + game.civs.size,
+  };
+}
+
+function handleAdmin(req, res, url, body) {
+  if (req.headers['x-admin-pass'] !== ADMIN_PASS) {
+    res.writeHead(401, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ error: 'unauthorized' }));
+  }
+  const send = (code, obj) => {
+    res.writeHead(code, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(obj));
+  };
+  if (req.method === 'POST' && url === '/api/admin/login') return send(200, { ok: true });
+  if (req.method === 'GET' && url === '/api/admin/state') return send(200, adminState());
+  if (req.method === 'POST' && url === '/api/admin/start') {
+    const r = game.startGame();
+    if (!r.ok) return send(400, r);
+    broadcast({
+      type: 'gameStarted',
+      units: [...game.units.values()],
+      phase: game.phase, turn: game.turn, endsAt: game.phaseEnds,
+    });
+    return send(200, { ok: true });
+  }
+  if (req.method === 'POST' && url === '/api/admin/reset') {
+    clearTimeout(game.timer);
+    game = makeGame();
+    broadcast({ type: 'reset' });
+    return send(200, { ok: true });
+  }
+  if (req.method === 'POST' && url === '/api/admin/kick') {
+    const civId = Number(body.civId);
+    const target = wsOfCiv(civId);
+    const ok = game.kick(civId);
+    if (!ok) return send(400, { error: 'no such civ' });
+    broadcast({ type: 'civKicked', civId });
+    if (target) { sendTo(target, { type: 'kicked' }); target.close(); }
+    return send(200, { ok: true });
+  }
+  if (req.method === 'POST' && url === '/api/admin/settings') {
+    const s = game.updateSettings(body);
+    return send(200, { ok: true, settings: s });
+  }
+  send(404, { error: 'not found' });
+}
+
+const server = http.createServer((req, res) => {
+  const url = req.url.split('?')[0];
+
+  if (url.startsWith('/api/admin/')) {
+    if (req.method === 'POST') {
+      let raw = '';
+      req.on('data', (d) => { raw += d; if (raw.length > 4096) req.destroy(); });
+      req.on('end', () => {
+        let body = {};
+        try { body = JSON.parse(raw || '{}'); } catch { }
+        handleAdmin(req, res, url, body);
+      });
+    } else {
+      handleAdmin(req, res, url, {});
+    }
+    return;
+  }
+
+  let p = url;
+  if (p === '/') p = '/index.html';
+  if (p === '/admin') p = '/admin.html';
+  const file = path.join(CLIENT_DIR, path.normalize(p));
+  if (!file.startsWith(CLIENT_DIR)) { res.writeHead(403); return res.end(); }
+  fs.readFile(file, (err, data) => {
+    if (err) { res.writeHead(404); return res.end('Not Found'); }
+    res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
+    res.end(data);
   });
-  for (const c of wss.clients) {
-    if (c.readyState !== 1 || c.civId == null) continue;
-    const civ = game.civs.get(c.civId);
-    if (!civ) continue;
-    sendTo(c, { type: 'resources', resources: civ.resources, gained: result.gains[c.civId] || null });
-    const sf = result.spawnFails.find(f => f.civId === c.civId);
-    if (sf) sendTo(c, { type: 'spawnFailed', reason: sf.reason });
-    const rf = result.researchFails.find(f => f.civId === c.civId);
-    if (rf) sendTo(c, { type: 'researchFailed', reason: rf.reason });
-  }
-  if (result.gameover) {
-    broadcast({ type: 'gameover', ...result.gameover });
-  }
-};
+});
+
+const wss = new WebSocketServer({ server });
+game = makeGame();
 
 wss.on('connection', (ws) => {
   ws.civId = null;
@@ -148,7 +228,7 @@ wss.on('connection', (ws) => {
         break;
       }
       case 'chat': {
-        if (ws.civId == null) return; // 관전자는 발신 불가
+        if (ws.civId == null) return;
         const text = String(msg.text || '').trim().slice(0, 200);
         if (!text) return;
         const from = ws.civId;
@@ -177,4 +257,4 @@ wss.on('connection', (ws) => {
   });
 });
 
-server.listen(PORT, () => console.log(`온라인 문명 서버 가동: http://localhost:${PORT}`));
+server.listen(PORT, () => console.log(`온라인 문명 서버 가동: http://localhost:${PORT} (관리자: /admin)`));

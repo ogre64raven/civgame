@@ -1,5 +1,7 @@
 // 세계지도 육지 마스크 → 헥스 그리드 샘플링 → data/worldmask.json
 // 실행: npm run buildmap  (world-atlas, topojson-client, d3-geo 필요 — devDependencies)
+// 참고: 수도가 바다인 나라를 위한 1헥스 섬 보정은 제거됨 —
+//       작은 대륙(5헥스 미만)에 수도가 있는 나라는 서버가 배정 풀에서 제외한다.
 const fs = require('fs');
 const path = require('path');
 const topojson = require('topojson-client');
@@ -7,7 +9,6 @@ const { geoContains } = require('d3-geo');
 
 const topo = require('world-atlas/land-110m.json');
 const land = topojson.feature(topo, topo.objects.land);
-const countries = require('../data/countries.json');
 
 // 그리드 설정 (odd-r offset, pointy-top). 위도 85N ~ 60S (남극 제외)
 const W = 90, H = 45, LAT_TOP = 85, LAT_SPAN = 145;
@@ -18,15 +19,6 @@ function hexToLonLat(x, y) {
   let lon = -180 + ((x + 0.5 + off) / W) * 360;
   if (lon > 180) lon -= 360;
   return [lon, lat];
-}
-
-function lonlatToHex(lat, lon) {
-  let y = Math.round(((LAT_TOP - lat) / LAT_SPAN) * H - 0.5);
-  y = Math.max(0, Math.min(H - 1, y));
-  const off = (y % 2) ? 0.5 : 0;
-  let x = Math.round(((lon + 180) / 360) * W - 0.5 - off);
-  x = ((x % W) + W) % W;
-  return [x, y];
 }
 
 // 결정적 해시 (지형 배치용)
@@ -71,20 +63,9 @@ for (let y = 0; y < H; y++) {
   grid.push(row);
 }
 
-// 모든 수도가 육지가 되도록 보정 (작은 섬나라 → 1헥스 섬 생성)
-let forced = 0;
-for (const c of countries) {
-  const [x, y] = lonlatToHex(c.cap[0], c.cap[1]);
-  if (grid[y][x] === '~') {
-    grid[y] = grid[y].slice(0, x) + terrainFor(x, y) + grid[y].slice(x + 1);
-    forced++;
-  }
-}
-
 const out = { w: W, h: H, latTop: LAT_TOP, latSpan: LAT_SPAN, rows: grid };
 fs.writeFileSync(path.join(__dirname, '../data/worldmask.json'), JSON.stringify(out));
 
 const landCount = grid.join('').replace(/~/g, '').length;
-console.log(`worldmask.json 생성: ${W}x${H}, 육지 ${landCount}타일 (${(landCount / (W * H) * 100).toFixed(1)}%), 섬 보정 ${forced}개국`);
-// 미리보기
+console.log(`worldmask.json 생성: ${W}x${H}, 육지 ${landCount}타일 (${(landCount / (W * H) * 100).toFixed(1)}%)`);
 for (let y = 0; y < H; y += 2) console.log(grid[y].replace(/~/g, '.').replace(/[gpfm]/g, '#'));

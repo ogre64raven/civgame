@@ -1,9 +1,6 @@
-// M2 검증: 이동 명령·경로·실행 턴 이동·채취·명령 거부
-// 짧은 페이즈(회의 2.5초/실행 0.8초)로 서버를 직접 스폰해서 테스트
-const { spawn } = require('child_process');
-const path = require('path');
-const WebSocket = require('ws');
+// M2 검증: (로비→시작 후) 이동 명령·경로·실행 턴 이동·채취·명령 거부
 const { World } = require('../server/world');
+const { startServer, admin, Client } = require('./testUtil');
 
 const PORT = 3100;
 const world = new World();
@@ -13,64 +10,28 @@ const check = (cond, label) => {
   if (!cond) fail++;
 };
 
-function startServer() {
-  return new Promise((resolve, reject) => {
-    const proc = spawn(process.execPath, [path.join(__dirname, '../server/index.js')], {
-      env: { ...process.env, PORT, PHASE_MEETING_MS: '2500', PHASE_EXEC_MS: '800' },
-    });
-    proc.stdout.on('data', (d) => { if (String(d).includes('가동')) resolve(proc); });
-    proc.stderr.on('data', (d) => console.error('서버 오류:', String(d)));
-    proc.on('exit', (c) => { if (c) reject(new Error('server exit ' + c)); });
-    setTimeout(() => reject(new Error('server start timeout')), 8000);
-  });
-}
-
-class Client {
-  constructor(name) { this.name = name; this.inbox = []; this.waiters = []; }
-  connect() {
-    return new Promise((resolve, reject) => {
-      this.ws = new WebSocket(`ws://localhost:${PORT}`);
-      this.ws.on('open', () => this.ws.send(JSON.stringify({ type: 'join', name: this.name })));
-      this.ws.on('message', (raw) => {
-        const m = JSON.parse(raw);
-        if (m.type === 'welcome') { this.welcome = m; resolve(m); }
-        this.inbox.push(m);
-        this.waiters = this.waiters.filter(w => !w(m));
-      });
-      this.ws.on('error', reject);
-      setTimeout(() => reject(new Error('join timeout')), 8000);
-    });
-  }
-  send(o) { this.ws.send(JSON.stringify(o)); }
-  next(pred, ms = 8000) {
-    return new Promise((resolve, reject) => {
-      const hit = this.inbox.find(pred);
-      if (hit) return resolve(hit);
-      const t = setTimeout(() => reject(new Error('message timeout')), ms);
-      this.waiters.push((m) => { if (pred(m)) { clearTimeout(t); resolve(m); return true; } return false; });
-    });
-  }
-  clearInbox() { this.inbox = []; }
-}
-
 (async () => {
-  const server = await startServer();
+  const server = await startServer(PORT, { PHASE_MEETING_MS: '2500', PHASE_EXEC_MS: '800' });
   try {
-    const A = new Client('공격자');
-    const B = new Client('수비자');
+    const A = new Client('공격자', PORT);
+    const B = new Client('수비자', PORT);
     await A.connect();
     await B.connect();
 
     check(!!A.welcome.resources && Array.isArray(A.welcome.orders), 'welcome에 자원·명령 포함');
 
-    const myUnits = A.welcome.units.filter(u => u.civ === A.welcome.you);
+    // 게임 시작 (관리자)
+    await admin(PORT, 'POST', 'start');
+    const gs = await A.next(m => m.type === 'gameStarted');
+    check(gs.units.length === 6 && gs.phase === 'MEETING', '게임 시작: 유닛 6기 스폰');
+
+    const myUnits = gs.units.filter(u => u.civ === A.welcome.you);
     const u = myUnits[0];
 
     // 적 유닛 위치 (전투 회피용)
-    const enemySet = new Set(A.welcome.units.filter(x => x.civ !== A.welcome.you).map(x => x.x + ',' + x.y));
+    const enemySet = new Set(gs.units.filter(x => x.civ !== A.welcome.you).map(x => x.x + ',' + x.y));
     const safe = (x, y) => !enemySet.has(x + ',' + y);
 
-    // 2칸 떨어진 안전한 육지 목표 찾기 (경유지도 안전해야 함)
     let target = null;
     outer:
     for (const [n1x, n1y] of world.neighbors(u.x, u.y)) {
@@ -84,20 +45,16 @@ class Client {
     }
     check(!!target, '2칸 거리 안전한 육지 목표 탐색');
 
-    if (A.welcome.phase !== 'MEETING') await A.next(m => m.type === 'phase' && m.phase === 'MEETING');
     A.clearInbox();
     A.send({ type: 'order.move', unitId: u.id, target });
     const ack = await A.next(m => m.type === 'orderAck' && m.unitId === u.id);
     check(ack.path.length >= 1 && ack.path.length <= 3, `경로 수신 (${ack.path.length}칸)`);
 
-    // 거부: 남의 유닛
-    const bUnit = A.welcome.units.find(x => x.civ !== A.welcome.you) ||
-      B.welcome.units.find(x => x.civ === B.welcome.you);
+    const bUnit = gs.units.find(x => x.civ !== A.welcome.you);
     A.send({ type: 'order.move', unitId: bUnit.id, target });
     const rej1 = await A.next(m => m.type === 'orderRejected' && m.unitId === bUnit.id);
     check(rej1.reason === 'unit', `남의 유닛 명령 거부 (${rej1.reason})`);
 
-    // 거부: 바다 목표
     let sea = null;
     for (let y = 0; y < world.h && !sea; y++)
       for (let x = 0; x < world.w && !sea; x++)
@@ -106,7 +63,6 @@ class Client {
     const rej2 = await A.next(m => m.type === 'orderRejected' && m.unitId === u.id);
     check(rej2.reason === 'target', `바다 목표 거부 (${rej2.reason})`);
 
-    // 실행 턴: 이동 브로드캐스트 + 위치 갱신
     const exec1 = await A.next(m => m.type === 'exec' && m.moves.some(v => v.unitId === u.id), 10000);
     const mv1 = exec1.moves.find(v => v.unitId === u.id);
     check(mv1.x === ack.path[0][0] && mv1.y === ack.path[0][1], `실행 턴에 1칸 이동 (${mv1.x},${mv1.y})`);
@@ -114,13 +70,11 @@ class Client {
     const execB = await B.next(m => m.type === 'exec' && m.moves.some(v => v.unitId === u.id), 10000);
     check(!!execB, '상대 클라이언트도 이동 수신');
 
-    // 채취
     const res1 = await A.next(m => m.type === 'resources', 10000);
     const total = Object.values(res1.resources).reduce((a, b) => a + b, 0);
     check(total > 0, `채취 동작 (누적 자원 ${total})`);
     check(res1.gained && Object.values(res1.gained).some(v => v > 0), '이번 턴 채취량 수신');
 
-    // 경로 완주
     let reached = false;
     for (let i = 0; i < ack.path.length + 2 && !reached; i++) {
       const ex = await A.next(m => m.type === 'exec' && m.moves.some(v => v.unitId === u.id), 12000).catch(() => null);
@@ -131,7 +85,6 @@ class Client {
     }
     check(reached, `목표 헥스 도달 (${target})`);
 
-    // 실행 턴 중 명령 거부
     await A.next(m => m.type === 'phase' && m.phase === 'EXECUTION', 10000);
     A.clearInbox();
     A.send({ type: 'order.move', unitId: u.id, target: [u.x, u.y] });

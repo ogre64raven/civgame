@@ -17,6 +17,7 @@ class World {
     this.w = m.w; this.h = m.h;
     this.latTop = m.latTop; this.latSpan = m.latSpan;
     this.rows = m.rows;
+    this._compSizes = null;
   }
 
   wrapX(x) { return ((x % this.w) + this.w) % this.w; }
@@ -50,13 +51,13 @@ class World {
     return [x, y];
   }
 
-  // (x,y)에서 가장 가까운, predicate를 만족하는 육지 헥스 (BFS)
-  nearestLand(x, y, predicate) {
+  // (x,y)에서 가장 가까운, predicate를 만족하는 육지 헥스 (BFS, maxDepth 링까지)
+  nearestLand(x, y, predicate, maxDepth = 30) {
     const ok = ([cx, cy]) => this.isLand(cx, cy) && (!predicate || predicate(cx, cy));
     if (ok([x, y])) return [x, y];
     const seen = new Set([x + ',' + y]);
     let frontier = [[x, y]];
-    for (let d = 0; d < 30; d++) {
+    for (let d = 0; d < maxDepth; d++) {
       const next = [];
       for (const cell of frontier) {
         for (const nb of this.neighbors(cell[0], cell[1])) {
@@ -70,6 +71,38 @@ class World {
       frontier = next;
     }
     return null;
+  }
+
+  // 육지 연결 컴포넌트(대륙/섬)별 크기: 'x,y' -> 크기
+  componentSizes() {
+    if (this._compSizes) return this._compSizes;
+    const sizes = new Map();
+    const seen = new Set();
+    for (let y = 0; y < this.h; y++) {
+      for (let x = 0; x < this.w; x++) {
+        const k0 = x + ',' + y;
+        if (!this.isLand(x, y) || seen.has(k0)) continue;
+        const cells = [k0];
+        seen.add(k0);
+        let frontier = [[x, y]];
+        while (frontier.length) {
+          const next = [];
+          for (const [cx, cy] of frontier) {
+            for (const [nx, ny] of this.neighbors(cx, cy)) {
+              const k = nx + ',' + ny;
+              if (seen.has(k) || !this.isLand(nx, ny)) continue;
+              seen.add(k);
+              cells.push(k);
+              next.push([nx, ny]);
+            }
+          }
+          frontier = next;
+        }
+        for (const k of cells) sizes.set(k, cells.length);
+      }
+    }
+    this._compSizes = sizes;
+    return sizes;
   }
 
   toJSON() {
