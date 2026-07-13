@@ -161,6 +161,98 @@ const Render = (() => {
     return seen;
   }
 
+  // 수도 건물: 채집+이동+방어 레벨 합(0~15)에 따라 6단계 발전 (스톤헨지 → 마천루)
+  function drawCapitalBuilding(cx, cy, civ) {
+    const t = civ.tech || {};
+    const sum = (t.gather || 0) + (t.move || 0) + (t.defense || 0);
+    const tier = Math.min(5, Math.floor(sum / 3));
+    const s = HEX;
+    const base = cy + s * 0.45;
+    ctx.lineCap = 'butt';
+    if (tier === 0) {
+      // 스톤헨지
+      ctx.fillStyle = '#a8b0b8';
+      const w = s * 0.18, h = s * 0.6;
+      ctx.fillRect(cx - s * 0.42, base - h, w, h);
+      ctx.fillRect(cx - w / 2, base - h, w, h);
+      ctx.fillRect(cx + s * 0.42 - w, base - h, w, h);
+      ctx.fillStyle = '#8d949c';
+      ctx.fillRect(cx - s * 0.5, base - h - s * 0.14, s, s * 0.14);
+    } else if (tier === 1) {
+      // 움집
+      ctx.fillStyle = '#8b5a2b';
+      ctx.beginPath();
+      ctx.moveTo(cx, base - s * 0.78);
+      ctx.lineTo(cx - s * 0.5, base);
+      ctx.lineTo(cx + s * 0.5, base);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = '#5b3a1a';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.fillStyle = '#4a2e14';
+      ctx.fillRect(cx - s * 0.09, base - s * 0.26, s * 0.18, s * 0.26);
+    } else if (tier === 2) {
+      // 석성 (흉벽 + 깃발)
+      ctx.fillStyle = '#9aa4ae';
+      ctx.fillRect(cx - s * 0.4, base - s * 0.55, s * 0.8, s * 0.55);
+      for (let i = -1; i <= 1; i++) ctx.fillRect(cx + i * s * 0.3 - s * 0.07, base - s * 0.68, s * 0.14, s * 0.13);
+      ctx.fillStyle = '#4a3324';
+      ctx.fillRect(cx - s * 0.1, base - s * 0.24, s * 0.2, s * 0.24);
+      ctx.strokeStyle = '#666';
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(cx, base - s * 0.68); ctx.lineTo(cx, base - s * 0.95); ctx.stroke();
+      ctx.fillStyle = civ.color;
+      ctx.beginPath();
+      ctx.moveTo(cx, base - s * 0.95);
+      ctx.lineTo(cx + s * 0.24, base - s * 0.88);
+      ctx.lineTo(cx, base - s * 0.81);
+      ctx.closePath();
+      ctx.fill();
+    } else if (tier === 3) {
+      // 신전·궁전 (기둥 + 페디먼트)
+      ctx.fillStyle = '#e8e2d0';
+      ctx.fillRect(cx - s * 0.52, base - s * 0.12, s * 1.04, s * 0.12);
+      for (let i = -2; i <= 2; i++) ctx.fillRect(cx + i * s * 0.22 - s * 0.045, base - s * 0.55, s * 0.09, s * 0.43);
+      ctx.fillRect(cx - s * 0.52, base - s * 0.66, s * 1.04, s * 0.11);
+      ctx.beginPath();
+      ctx.moveTo(cx - s * 0.55, base - s * 0.66);
+      ctx.lineTo(cx, base - s * 0.95);
+      ctx.lineTo(cx + s * 0.55, base - s * 0.66);
+      ctx.closePath();
+      ctx.fill();
+    } else if (tier === 4) {
+      // 산업시대 공장 (벽돌 + 굴뚝 + 연기)
+      ctx.fillStyle = '#7d4438';
+      ctx.fillRect(cx - s * 0.5, base - s * 0.6, s * 0.85, s * 0.6);
+      ctx.fillStyle = '#5f3129';
+      ctx.fillRect(cx + s * 0.28, base - s * 0.95, s * 0.16, s * 0.95);
+      ctx.fillStyle = '#ffd76a';
+      for (let r = 0; r < 2; r++)
+        for (let c2 = 0; c2 < 3; c2++)
+          ctx.fillRect(cx - s * 0.42 + c2 * s * 0.26, base - s * 0.5 + r * s * 0.28, s * 0.13, s * 0.15);
+      ctx.fillStyle = 'rgba(210,210,210,.55)';
+      ctx.beginPath(); ctx.arc(cx + s * 0.36, base - s * 1.05, s * 0.11, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(cx + s * 0.48, base - s * 1.18, s * 0.08, 0, Math.PI * 2); ctx.fill();
+    } else {
+      // 마천루 (유리 타워 3동 + 안테나)
+      ctx.fillStyle = '#38506b';
+      ctx.fillRect(cx - s * 0.55, base - s * 0.75, s * 0.3, s * 0.75);
+      ctx.fillRect(cx + s * 0.25, base - s * 0.6, s * 0.3, s * 0.6);
+      ctx.fillStyle = '#5fa8d3';
+      ctx.fillRect(cx - s * 0.14, base - s * 1.15, s * 0.28, s * 1.15);
+      ctx.fillStyle = '#dbeafe';
+      for (let r = 0; r < 5; r++) ctx.fillRect(cx - s * 0.08, base - s * 1.05 + r * s * 0.22, s * 0.16, s * 0.07);
+      for (let r = 0; r < 3; r++) {
+        ctx.fillRect(cx - s * 0.49, base - s * 0.65 + r * s * 0.22, s * 0.18, s * 0.06);
+        ctx.fillRect(cx + s * 0.31, base - s * 0.5 + r * s * 0.18, s * 0.18, s * 0.06);
+      }
+      ctx.strokeStyle = '#9aa0a6';
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(cx, base - s * 1.15); ctx.lineTo(cx, base - s * 1.38); ctx.stroke();
+    }
+  }
+
   // 사람 모양 유닛 (군사 기술 레벨에 따라 무기·갑옷 발전: 석기 → 현대군)
   function drawUnitFigure(cx, cy, s, color, mil) {
     const headR = s * 0.3;
@@ -250,11 +342,131 @@ const Render = (() => {
     }
   }
 
+  // ── 전투 연출 (격돌 → 타격 스파크 → 승패/무승부 결과)
+  const FX_MS = 3000;
+  let battleFx = [];
+  function addBattleFx(fx) {
+    fx.start = Date.now();
+    battleFx.push(fx);
+  }
+
+  function drawSpark(cx, cy, r, seed) {
+    ctx.strokeStyle = '#ffe066';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let i = 0; i < 8; i++) {
+      const a = (Math.PI * 2 * i) / 8 + seed;
+      const len = r * (0.45 + 0.3 * Math.abs(Math.sin(seed * 9 + i * 2)));
+      ctx.moveTo(cx + Math.cos(a) * r * 0.18, cy + Math.sin(a) * r * 0.18);
+      ctx.lineTo(cx + Math.cos(a) * len, cy + Math.sin(a) * len);
+    }
+    ctx.stroke();
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(cx, cy, r * 0.12, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawBattleFx(fx, nowMs, isVis, state) {
+    const [hx, hy] = fx.hex;
+    if (!isVis(hx, hy)) return;
+    const [cx, cy] = hexCenter(hx, hy);
+    const t = (nowMs - fx.start) / 1000;
+    const s = HEX * 0.5;
+    const info = (id) => {
+      const c = state.civs.get(id);
+      return { color: c ? c.color : '#94a3b8', mil: (c && c.tech && c.tech.military) || 0 };
+    };
+    const L = info(fx.winners[0]);
+    const R = info(fx.draw ? (fx.winners[1] != null ? fx.winners[1] : fx.winners[0]) : fx.losers[0]);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    if (t < 1.6) {
+      // ① 격돌: 서로 부딪히며 타격
+      const bounce = Math.abs(Math.sin(t * 7));
+      const gap = HEX * (0.28 + 0.5 * bounce);
+      drawUnitFigure(cx - gap, cy, s, L.color, L.mil);
+      ctx.save();
+      ctx.translate(cx + gap, cy);
+      ctx.scale(-1, 1); // 오른쪽은 왼쪽을 향하도록 반전
+      drawUnitFigure(0, 0, s, R.color, R.mil);
+      ctx.restore();
+      if (bounce < 0.4) drawSpark(cx, cy - s * 0.25, HEX * 0.6, t * 5);
+      // 흙먼지
+      ctx.fillStyle = 'rgba(200,190,160,.35)';
+      for (let i = 0; i < 3; i++) {
+        const a = t * 3 + i * 2.1;
+        ctx.beginPath();
+        ctx.arc(cx + Math.cos(a) * HEX * 0.7, cy + s * 0.8, s * (0.12 + 0.06 * Math.sin(a * 2)), 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else {
+      // ② 결과
+      const p = Math.min(1, (t - 1.6) / 0.4);
+      if (fx.draw) {
+        // 무승부: 양쪽 모두 주저앉아 어질어질
+        for (const side of [-1, 1]) {
+          const bx = cx + side * HEX * 0.5;
+          const c = side < 0 ? L : R;
+          ctx.save();
+          ctx.translate(bx, cy + s * 0.3);
+          ctx.rotate(side * 0.3);
+          ctx.globalAlpha = 0.8;
+          drawUnitFigure(0, 0, s * 0.9, c.color, c.mil);
+          ctx.restore();
+          ctx.globalAlpha = 1;
+          ctx.fillStyle = '#ffe066';
+          for (let i = 0; i < 3; i++) {
+            const a = t * 4 + i * 2.09;
+            ctx.beginPath();
+            ctx.arc(bx + Math.cos(a) * s * 0.55, cy - s * 0.9 + Math.sin(a) * s * 0.18, 1.6, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+        ctx.globalAlpha = p;
+        ctx.fillStyle = '#cbd5e1';
+        ctx.font = `bold ${HEX * 0.55}px sans-serif`;
+        ctx.fillText('무승부', cx, cy - HEX * 1.25);
+        ctx.globalAlpha = 1;
+      } else {
+        // 승자: 무기 치켜들고 환호
+        const cheer = Math.sin(t * 6) * s * 0.08;
+        drawUnitFigure(cx - HEX * 0.35, cy + cheer, s, L.color, L.mil);
+        ctx.strokeStyle = L.color;
+        ctx.lineWidth = s * 0.18;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(cx - HEX * 0.35, cy + cheer - s * 0.1);
+        ctx.lineTo(cx - HEX * 0.35 - s * 0.55, cy + cheer - s * 0.85);
+        ctx.stroke();
+        // 패자: 쓰러짐
+        ctx.save();
+        ctx.translate(cx + HEX * 0.55, cy + s * 0.65);
+        ctx.rotate(1.35);
+        ctx.globalAlpha = Math.max(0.25, 0.7 - p * 0.3);
+        drawUnitFigure(0, 0, s * 0.85, R.color, R.mil);
+        ctx.restore();
+        ctx.globalAlpha = p;
+        ctx.fillStyle = L.color;
+        ctx.font = `bold ${HEX * 0.55}px sans-serif`;
+        ctx.fillText('승리!', cx - HEX * 0.35, cy - HEX * 1.25);
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = `bold ${HEX * 0.4}px sans-serif`;
+        ctx.fillText('패배', cx + HEX * 0.55, cy - HEX * 0.7);
+        ctx.globalAlpha = 1;
+      }
+    }
+  }
+
   function draw(state) {
     if (!state.map) return;
     const map = state.map;
     const vision = computeVision(state);
     const isVis = (x, y) => !vision || vision.has(x + ',' + y);
+    const nowMs = Date.now();
+    battleFx = battleFx.filter(f => nowMs - f.start < FX_MS);
+    const fxHexes = new Set(battleFx.map(f => f.hex[0] + ',' + f.hex[1]));
     ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
     ctx.fillStyle = '#0b1220';
     ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
@@ -306,6 +518,19 @@ const Render = (() => {
       if (!inView(cx, cy)) continue;
       drawHex(cx, cy, HEX + 1, null, civ.color, 2.5);
       drawHex(cx, cy, HEX + 3, null, 'rgba(255,255,255,.35)', 1);
+      if (civ.alive) {
+        drawCapitalBuilding(cx, cy, civ);
+        // 수도 HP 바 (피해 시에만 표시)
+        if (civ.capitalMaxHp && civ.capitalHp < civ.capitalMaxHp) {
+          const bw = HEX * 1.6, bh = 3.2;
+          const bx = cx - bw / 2, by2 = cy - HEX * 1.55;
+          ctx.fillStyle = 'rgba(0,0,0,.65)';
+          ctx.fillRect(bx - 0.5, by2 - 0.5, bw + 1, bh + 1);
+          const ratio = Math.max(0, civ.capitalHp / civ.capitalMaxHp);
+          ctx.fillStyle = ratio > 0.4 ? '#4ade80' : '#f87171';
+          ctx.fillRect(bx, by2, bw * ratio, bh);
+        }
+      }
     }
 
     // 내 유닛 이동 경로
@@ -340,6 +565,7 @@ const Render = (() => {
       byHex.get(k).push(u);
     }
     for (const [k, units] of byHex) {
+      if (fxHexes.has(k)) continue; // 전투 연출 중
       const [x, y] = k.split(',').map(Number);
       if (!isVis(x, y)) continue;
       const [cx, cy] = hexCenter(x, y);
@@ -399,6 +625,9 @@ const Render = (() => {
         ctx.stroke();
       }
     }
+
+    // 전투 연출
+    for (const fx of battleFx) drawBattleFx(fx, nowMs, isVis, state);
   }
 
   function centerOn(hexX, hexY) {
@@ -408,5 +637,5 @@ const Render = (() => {
     cam.y = cy * cam.zoom - window.innerHeight / 2;
   }
 
-  return { canvas, cam, HEX, draw, centerOn, hexCenter, hexAt };
+  return { canvas, cam, HEX, draw, centerOn, hexCenter, hexAt, addBattleFx };
 })();

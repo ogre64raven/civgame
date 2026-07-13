@@ -222,6 +222,9 @@
           if (t.civId === state.you) toast(`연구 완료 — ${TECH_KO[t.branch]} Lv${t.level}`);
         }
         for (const b of msg.battles || []) {
+          const losersFx = b.civs.filter(c => c.lost > 0).map(c => c.civId);
+          const winnersFx = b.civs.filter(c => c.lost === 0).map(c => c.civId);
+          Render.addBattleFx({ hex: b.hex, winners: winnersFx, losers: losersFx, draw: losersFx.length === 0 });
           const mine = b.civs.find(c => c.civId === state.you);
           if (!mine) continue;
           if (mine.lost > 0) toast(`전투 패배 — 유닛이 수도로 후퇴합니다`);
@@ -231,6 +234,14 @@
         for (const [a, b] of msg.allyLeft || []) {
           state.alliances.delete(pairKey(a, b));
           if (a === state.you || b === state.you) toast(`동맹 해체: ${civName(a)} - ${civName(b)}`);
+        }
+        for (const h of msg.capitalHits || []) {
+          const c = state.civs.get(h.civId);
+          if (c) { c.capitalHp = h.hp; c.capitalMaxHp = h.max; }
+          if (h.by != null) {
+            if (h.civId === state.you) toast(`수도가 공격받고 있습니다! HP ${h.hp}/${h.max}`);
+            else if (h.by === state.you) toast(`적 수도 공성 중 — HP ${h.hp}/${h.max}`);
+          }
         }
         for (const cq of msg.conquests || []) {
           const c = state.civs.get(cq.civId);

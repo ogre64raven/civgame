@@ -150,6 +150,11 @@ class Game {
     const t = civ.tech;
     return (t.military + t.defense + t.gather + t.move) + this.tileCountOf(civ.id);
   }
+  // 수도 최대 HP = 5 + 4계통 기술 총합
+  maxCapitalHp(civ) {
+    const t = civ.tech;
+    return 5 + t.military + t.defense + t.gather + t.move;
+  }
   scoresPublic() {
     return [...this.civs.values()].filter(c => c.alive).map(c => ({ civId: c.id, score: this.score(c) }));
   }
@@ -168,6 +173,9 @@ class Game {
   // 유닛이 밟은 헥스 점령 (동맹 영토는 존중)
   claim(x, y, civId) {
     if (!this.world.isLand(x, y)) return;
+    for (const c of this.civs.values()) {
+      if (c.alive && c.id !== civId && c.capital[0] === x && c.capital[1] === y) return; // 수도는 공성으로만
+    }
     const k = x + ',' + y;
     const cur = this.territory.get(k);
     if (cur === civId) return;
@@ -218,17 +226,36 @@ class Game {
     const { battles, stuns, retreats } = this.resolveBattles(stunnedNow);
     for (const r of retreats) moves.push(r);
 
-    // ③ 수도 함락 → 점령(예속)
+    // ③ 수도 공성: 수도 위 적 유닛이 유닛당 (1+군사Lv) 피해, HP 0 → 함락.
+    //    공격이 없으면 턴당 1 회복 (최대 5+기술총합)
     const conquests = [];
+    const capitalHits = [];
     for (const civ of this.civs.values()) {
       if (!civ.alive) continue;
-      const owner = this.territory.get(civ.capital[0] + ',' + civ.capital[1]);
-      if (owner != null && owner !== civ.id) {
-        const ownerCiv = this.civs.get(owner);
-        if (ownerCiv && ownerCiv.alive && !this.isAllied(owner, civ.id)) {
-          conquests.push(this.subjugate(civ, owner));
-        }
+      const [kx, ky] = civ.capital;
+      const attackers = new Map(); // civId -> 피해량
+      for (const u of this.units.values()) {
+        if (u.x !== kx || u.y !== ky) continue;
+        if (u.civ === civ.id || this.isAllied(u.civ, civ.id)) continue;
+        if (u.stunned > 0 || stunnedNow.has(u.id)) continue; // 행동불능 유닛은 공성 불가
+        const atkCiv = this.civs.get(u.civ);
+        const dmg = 1 + ((atkCiv && atkCiv.tech.military) || 0);
+        attackers.set(u.civ, (attackers.get(u.civ) || 0) + dmg);
       }
+      const max = this.maxCapitalHp(civ);
+      if (attackers.size === 0) {
+        if (civ.capitalHp < max) {
+          civ.capitalHp = Math.min(max, civ.capitalHp + 1);
+          capitalHits.push({ civId: civ.id, hp: civ.capitalHp, max });
+        }
+        continue;
+      }
+      const total = [...attackers.values()].reduce((a, b) => a + b, 0);
+      civ.capitalHp = Math.max(0, civ.capitalHp - total);
+      let by = null, best = -1;
+      for (const [cid, d] of attackers) if (d > best) { best = d; by = cid; }
+      capitalHits.push({ civId: civ.id, hp: civ.capitalHp, max, by });
+      if (civ.capitalHp <= 0) conquests.push(this.subjugate(civ, by));
     }
 
     // ④ 채취: 영토가 자동 생산. 동맹은 수입을 합산해 영토 수 비율로 배분
@@ -303,7 +330,7 @@ class Game {
     });
 
     return {
-      moves, battles, stuns, captures, conquests, delegations: this._delegations,
+      moves, battles, stuns, captures, capitalHits, conquests, delegations: this._delegations,
       gains, techUpdates, researchFails, allyLeft, absorptions, gameover,
       scores: this.scoresPublic(),
     };
@@ -756,6 +783,7 @@ class Game {
       connected: true,
       resources: { meat: 0, grain: 0, wood: 0, iron: 0 },
       tech: { military: 0, defense: 0, gather: 0, move: 0 },
+      capitalHp: 5,
       alive: true,
       conqueredBy: null,
     };
@@ -777,6 +805,7 @@ class Game {
       player: civ.player, color: civ.color, capital: civ.capital,
       connected: civ.connected, alive: civ.alive, conqueredBy: civ.conqueredBy,
       tech: civ.tech,
+      capitalHp: civ.capitalHp, capitalMaxHp: this.maxCapitalHp(civ),
     };
   }
 

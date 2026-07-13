@@ -143,8 +143,13 @@ const key = (h) => h[0] + ',' + h[1];
   [ua.x, ua.y] = nb;
   const mo = game.moveOrder(A.id, ua.id, bCap);
   check(mo.ok && mo.path.length === 1, '수도 진입 경로');
-  const r = game.resolveExecution();
-  check(r.conquests.length === 1 && r.conquests[0].civId === B.id, '수도 함락 → 점령');
+  const r0 = game.resolveExecution();
+  check(ua.x === bCap[0] && ua.y === bCap[1], '수도 진입');
+  check(bCiv.alive && bCiv.capitalHp === 4, `1턴 공성 → HP 4 (한 번에 함락 안 됨)`);
+  check(game.territory.get(key(bCap)) === B.id, '함락 전까지 수도 타일 유지');
+  let r = r0;
+  for (let i = 0; i < 6 && bCiv.alive; i++) r = game.resolveExecution();
+  check(r.conquests.length === 1 && r.conquests[0].civId === B.id, 'HP 0 → 수도 함락·점령');
   check(!bCiv.alive && bCiv.conqueredBy === A.id, '예속 상태');
   check(bUnits.every(u => u.civ === A.id), '유닛은 점령국 소속으로 편입');
   check(game.territory.get(key(bCap)) === A.id, '영토 이전');
@@ -222,6 +227,27 @@ const key = (h) => h[0] + ',' + h[1];
   game.resolveExecution();
   const last = mo.path[mo.path.length - 1];
   check(u.x === last[0] && u.y === last[1], '2턴차에 바다 목표 도달');
+}
+
+// ── 11. 수도 HP: 기술 총합 비례 + 회복 + 군사 기술 피해
+{
+  const { game, civs } = newGame(3);
+  const [A, B] = civs;
+  const bCiv = game.civs.get(B.id);
+  check(game.maxCapitalHp(bCiv) === 5, '기본 수도 HP 5');
+  bCiv.tech.military = 2; bCiv.tech.gather = 3; bCiv.tech.move = 1; bCiv.tech.defense = 4;
+  check(game.maxCapitalHp(bCiv) === 15, '기술 총합 10 → 최대 HP 15');
+  // 군사 3레벨 공격자는 유닛당 4 피해
+  game.civs.get(A.id).tech.military = 3;
+  bCiv.capitalHp = 15;
+  const ua = unitsOf(game, A.id)[0];
+  [ua.x, ua.y] = bCiv.capital;
+  game.resolveExecution();
+  check(bCiv.capitalHp === 11, `군사 Lv3 → 턴당 4 피해 (HP ${bCiv.capitalHp})`);
+  // 공격 중단 → 턴당 1 회복
+  [ua.x, ua.y] = isolated[39];
+  game.resolveExecution();
+  check(bCiv.capitalHp === 12, `공격 중단 → 회복 (HP ${bCiv.capitalHp})`);
 }
 
 console.log(fail === 0 ? '\n모든 테스트 통과' : `\n실패 ${fail}건`);

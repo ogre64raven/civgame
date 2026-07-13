@@ -137,7 +137,9 @@ const unitsOf = (g, id) => [...g.units.values()].filter(u => u.civ === id);
   const { game, civs } = newGame(2);
   const [A, B] = civs;
   const bCap = game.civs.get(B.id).capital;
-  game.claim(bCap[0], bCap[1], A.id); // A가 B 수도 점령
+  game.civs.get(B.id).capitalHp = 1; // 공성 마무리 단계 가정
+  const ua0 = unitsOf(game, A.id)[0];
+  [ua0.x, ua0.y] = bCap;
   const r = game.resolveExecution();
   check(!!r.gameover && r.gameover.reason === 'domination', '제패 승리 판정');
   check(r.gameover.winners[0] === A.id, '승자 = 점령 문명');
@@ -166,8 +168,10 @@ const unitsOf = (g, id) => [...g.units.values()].filter(u => u.civ === id);
   const { game, civs } = newGame(3);
   const [A, B] = civs;
   const bCiv = game.civs.get(B.id);
-  game.claim(bCiv.capital[0], bCiv.capital[1], A.id);
-  game.resolveExecution(); // 수도 함락 → B 예속, 기본 위임 1기
+  bCiv.capitalHp = 1;
+  const ua8 = unitsOf(game, A.id)[0];
+  [ua8.x, ua8.y] = bCiv.capital;
+  game.resolveExecution(); // 공성 → 수도 함락 → B 예속, 기본 위임 1기
   const cnt = () => [...game.units.values()].filter(u => u.controller === B.id).length;
   check(!bCiv.alive && cnt() === 1, '점령 직후 기본 위임 1기');
   let r = game.setDelegation(A.id, B.id, 3);

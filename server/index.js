@@ -37,7 +37,7 @@ function makeGame() {
     broadcast({
       type: 'exec', turn: g.turn,
       moves: result.moves, battles: result.battles, stuns: result.stuns,
-      captures: result.captures, conquests: result.conquests,
+      captures: result.captures, capitalHits: result.capitalHits, conquests: result.conquests,
       delegations: result.delegations, techUpdates: result.techUpdates,
       allyLeft: result.allyLeft, absorptions: result.absorptions, scores: result.scores,
     });
