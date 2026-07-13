@@ -55,17 +55,22 @@ const check = (cond, label) => {
     const rej1 = await A.next(m => m.type === 'orderRejected' && m.unitId === bUnit.id);
     check(rej1.reason === 'unit', `남의 유닛 명령 거부 (${rej1.reason})`);
 
-    let sea = null;
-    for (let y = 0; y < world.h && !sea; y++)
-      for (let x = 0; x < world.w && !sea; x++)
-        if (!world.isLand(x, y)) sea = [x, y];
-    A.send({ type: 'order.move', unitId: u.id, target: sea });
+    A.send({ type: 'order.move', unitId: u.id, target: [0, -5] });
     const rej2 = await A.next(m => m.type === 'orderRejected' && m.unitId === u.id);
-    check(rej2.reason === 'target', `바다 목표 거부 (${rej2.reason})`);
+    check(rej2.reason === 'target', `맵 밖 목표 거부 (${rej2.reason})`);
+    // 바다 목표는 이제 허용 — 확인 후 원래 명령 복원
+    A.send({ type: 'order.move', unitId: u.id, target: (() => {
+      for (let y = 0; y < world.h; y++) for (let x = 0; x < world.w; x++) if (!world.isLand(x, y)) return [x, y];
+    })() });
+    const seaAck = await A.next(m => (m.type === 'orderAck' || m.type === 'orderRejected') && m.unitId === u.id && m !== rej2);
+    check(seaAck.type === 'orderAck', '바다 목표 이동 허용');
+    A.send({ type: 'order.move', unitId: u.id, target });
+    await A.next(m => m.type === 'orderAck' && m.unitId === u.id && m !== seaAck);
 
     const exec1 = await A.next(m => m.type === 'exec' && m.moves.some(v => v.unitId === u.id), 10000);
     const mv1 = exec1.moves.find(v => v.unitId === u.id);
-    check(mv1.x === ack.path[0][0] && mv1.y === ack.path[0][1], `실행 턴에 1칸 이동 (${mv1.x},${mv1.y})`);
+    const expected = ack.path[Math.min(2, ack.path.length) - 1]; // 기본 이동력 2
+    check(mv1.x === expected[0] && mv1.y === expected[1], `실행 턴 이동력 2 (${mv1.x},${mv1.y})`);
 
     const execB = await B.next(m => m.type === 'exec' && m.moves.some(v => v.unitId === u.id), 10000);
     check(!!execB, '상대 클라이언트도 이동 수신');

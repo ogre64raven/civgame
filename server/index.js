@@ -31,8 +31,8 @@ function makeGame() {
   g.onExec = (result) => {
     broadcast({
       type: 'exec', turn: g.turn,
-      moves: result.moves, battles: result.battles, deaths: result.deaths,
-      stuns: result.stuns, births: result.births, conquests: result.conquests,
+      moves: result.moves, battles: result.battles, stuns: result.stuns,
+      captures: result.captures, conquests: result.conquests,
       delegations: result.delegations, techUpdates: result.techUpdates,
       allyLeft: result.allyLeft, absorptions: result.absorptions, scores: result.scores,
     });
@@ -41,8 +41,6 @@ function makeGame() {
       const civ = g.civs.get(c.civId);
       if (!civ) continue;
       sendTo(c, { type: 'resources', resources: civ.resources, gained: result.gains[c.civId] || null });
-      const sf = result.spawnFails.find(f => f.civId === c.civId);
-      if (sf) sendTo(c, { type: 'spawnFailed', reason: sf.reason });
       const rf = result.researchFails.find(f => f.civId === c.civId);
       if (rf) sendTo(c, { type: 'researchFailed', reason: rf.reason });
     }
@@ -60,7 +58,9 @@ function adminState() {
     players: [...game.civs.values()].map(c => ({
       id: c.id, name: c.name, code: c.code, player: c.player,
       connected: c.connected, alive: c.alive, conqueredBy: c.conqueredBy,
-      units: game.unitCountOf(c.id), score: game.score(c),
+      units: [...game.units.values()].filter(u => u.civ === c.id).length,
+      tiles: game.tileCountOf(c.id),
+      score: game.score(c),
     })),
     spectators: [...wss.clients].filter(c => c.readyState === 1 && c.civId == null).length,
     eligibleCountries: game.pool.length + game.civs.size,
@@ -84,6 +84,7 @@ function handleAdmin(req, res, url, body) {
     broadcast({
       type: 'gameStarted',
       units: [...game.units.values()],
+      territory: game.territoryPublic(),
       phase: game.phase, turn: game.turn, endsAt: game.phaseEnds,
     });
     return send(200, { ok: true });
@@ -172,6 +173,8 @@ wss.on('connection', (ws) => {
           type: r.isNew ? 'civJoined' : 'civResumed',
           civ: game.civPublic(r.civ),
           units: r.isNew ? [...game.units.values()].filter(u => u.civ === r.civ.id) : undefined,
+          territory: r.isNew && game.state === 'RUNNING'
+            ? [[r.civ.capital[0], r.civ.capital[1], r.civ.id]] : undefined,
         });
         break;
       }
@@ -186,13 +189,6 @@ wss.on('connection', (ws) => {
         if (ws.civId == null) return;
         game.cancelOrder(ws.civId, msg.unitId);
         sendTo(ws, { type: 'orderAck', unitId: msg.unitId, path: [] });
-        break;
-      }
-      case 'order.spawn': {
-        if (ws.civId == null) return;
-        const r = game.spawnOrder(ws.civId, msg.hex);
-        if (r.ok) sendTo(ws, { type: 'spawnAck', hex: msg.hex });
-        else sendTo(ws, { type: 'spawnRejected', reason: r.reason });
         break;
       }
       case 'order.research': {
@@ -225,6 +221,14 @@ wss.on('connection', (ws) => {
         const r = game.leaveAlly(ws.civId, msg.civId);
         if (r.ok) sendTo(ws, { type: 'allyLeaveAck', civId: msg.civId });
         else sendTo(ws, { type: 'allyRejected', reason: r.reason });
+        break;
+      }
+      case 'vassal.delegate': {
+        if (ws.civId == null) return;
+        const r = game.setDelegation(ws.civId, msg.civId, msg.count);
+        if (!r.ok) { sendTo(ws, { type: 'delegateRejected', reason: r.reason }); break; }
+        if (r.changes.length) broadcast({ type: 'delegations', delegations: r.changes });
+        sendTo(ws, { type: 'delegateAck', civId: msg.civId, count: r.count });
         break;
       }
       case 'chat': {

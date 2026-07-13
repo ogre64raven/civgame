@@ -1,7 +1,6 @@
-// M3 검증: 전투(동률/수 우위/기술 우위)·점령/위임·생산/상한/비용·스턴 회복
-// Game 클래스를 직접 구동하는 유닛 테스트 (서버/타이머 불필요)
+// v2 검증: 영토화 이동·영토 채취·전투(후퇴/방어)·수도 함락 점령·유닛 불변
 const { World } = require('../server/world');
-const { Game, UNIT_CAP } = require('../server/game');
+const { Game, START_UNITS } = require('../server/game');
 
 const world = new World();
 let fail = 0;
@@ -10,7 +9,6 @@ const check = (cond, label) => {
   if (!cond) fail++;
 };
 
-// 서로 멀리 떨어진 육지 헥스 목록
 const isolated = [];
 for (let y = 2; y < world.h - 2 && isolated.length < 40; y += 3)
   for (let x = 0; x < world.w && isolated.length < 40; x += 8)
@@ -20,15 +18,55 @@ function newGame(n) {
   const game = new Game(world, () => {});
   const civs = [];
   for (let i = 0; i < n; i++) civs.push(game.join(undefined, 'P' + (i + 1)).civ);
-  game.startGame();          // 로비 → 진행 (유닛 스폰)
-  clearTimeout(game.timer);  // 실제 타이머는 사용 안 함
+  game.startGame();
+  clearTimeout(game.timer);
   let i = 0;
   for (const u of game.units.values()) { [u.x, u.y] = isolated[i++]; }
   return { game, civs };
 }
 const unitsOf = (g, id) => [...g.units.values()].filter(u => u.civ === id);
+const key = (h) => h[0] + ',' + h[1];
 
-// ── 1. 기술력 동률 → 양측 2턴 행동불능, 소멸 없음
+// ── 1. 이동 경로 영토화
+{
+  const { game, civs } = newGame(1);
+  const A = civs[0];
+  const u = unitsOf(game, A.id)[0];
+  // 2칸 경로 목표
+  let target = null, mid = null;
+  outer:
+  for (const n1 of world.neighbors(u.x, u.y)) {
+    if (!world.isLand(n1[0], n1[1])) continue;
+    for (const n2 of world.neighbors(n1[0], n1[1])) {
+      if (!world.isLand(n2[0], n2[1])) continue;
+      if (n2[0] === u.x && n2[1] === u.y) continue;
+      mid = n1; target = n2;
+      break outer;
+    }
+  }
+  const mo = game.moveOrder(A.id, u.id, target);
+  check(mo.ok, '이동 명령 접수');
+  const r1 = game.resolveExecution();
+  check(game.territory.get(key(mo.path[0])) === A.id, '1칸째 이동 → 영토화');
+  check(r1.captures.some(([x, y, c]) => c === A.id), '점령 브로드캐스트');
+  game.resolveExecution();
+  check(game.territory.get(key(target)) === A.id, '경로 전체 영토화');
+  check(game.tileCountOf(A.id) >= 3, `영토 수 누적 (수도+경로, ${game.tileCountOf(A.id)}타일)`);
+}
+
+// ── 2. 영토 자동 채취 (+채집 기술 20%)
+{
+  const { game, civs } = newGame(1);
+  const A = game.civs.get(civs[0].id);
+  const capRes = world.resourceAt(A.capital[0], A.capital[1]);
+  game.resolveExecution();
+  check(A.resources[capRes] === 1, `영토(수도 1타일) 자동 채취 (+1 ${capRes})`);
+  A.tech.gather = 5; // +100%
+  game.resolveExecution();
+  check(A.resources[capRes] === 3, '채집 Lv5 → 타일당 2 (ceil(1×2))');
+}
+
+// ── 3. 동률 전투: 양측 행동불능, 후퇴·소멸 없음
 {
   const { game, civs } = newGame(2);
   const [A, B] = civs;
@@ -36,20 +74,29 @@ const unitsOf = (g, id) => [...g.units.values()].filter(u => u.civ === id);
   const ua = unitsOf(game, A.id)[0], ub = unitsOf(game, B.id)[0];
   [ua.x, ua.y] = hex; [ub.x, ub.y] = hex;
   const r = game.resolveExecution();
-  check(r.deaths.length === 0 && r.battles.length === 1, '동률 전투: 사망 없음');
-  check(ua.stunned === 2 && ub.stunned === 2, '동률 전투: 양측 2턴 행동불능');
-
-  game.moveOrder(A.id, ua.id, [world.neighbors(hex[0], hex[1]).find(([x, y]) => world.isLand(x, y)) || hex].flat().slice(0, 2));
-  const r2 = game.resolveExecution();
-  check(!r2.moves.some(m => m.unitId === ua.id), '스턴 1턴차: 이동 불가');
-  const r3 = game.resolveExecution();
-  check(!r3.moves.some(m => m.unitId === ua.id), '스턴 2턴차: 이동 불가');
-  [ub.x, ub.y] = isolated[21];
-  const r4 = game.resolveExecution();
-  check(r4.moves.some(m => m.unitId === ua.id), '스턴 해제 후 이동 재개');
+  check(r.battles.length === 1 && ua.stunned === 2 && ub.stunned === 2, '동률: 양측 2턴 행동불능');
+  check(ua.x === hex[0] && ub.x === hex[0], '동률: 후퇴 없음');
+  check(game.units.size === 2 * START_UNITS, '유닛 소멸 없음');
 }
 
-// ── 2. 수 우위 (2배 이상 +1) → 소수 측 전멸, 승자 1턴 행동불능
+// ── 4. 기술 우위: 패자 수도 후퇴 + 2턴, 승자 헥스 점령
+{
+  const { game, civs } = newGame(2);
+  const [A, B] = civs;
+  game.civs.get(A.id).tech.military = 1;
+  const hex = isolated[21];
+  const ua = unitsOf(game, A.id)[0], ub = unitsOf(game, B.id)[0];
+  [ua.x, ua.y] = hex; [ub.x, ub.y] = hex;
+  const r = game.resolveExecution();
+  const bCap = game.civs.get(B.id).capital;
+  check(ub.x === bCap[0] && ub.y === bCap[1] && ub.stunned === 2, '패자: 수도 후퇴 + 2턴 행동불능');
+  check(ua.stunned === 1 && ua.x === hex[0], '승자: 1턴 행동불능, 헥스 유지');
+  check(game.territory.get(key(hex)) === A.id, '전투 헥스 승자 점령');
+  check(r.moves.some(m => m.unitId === ub.id && m.x === bCap[0]), '후퇴 위치 브로드캐스트');
+  check(game.units.size === 2 * START_UNITS, '유닛 소멸 없음');
+}
+
+// ── 5. 수 우위 (2배 이상 +1)
 {
   const { game, civs } = newGame(2);
   const [A, B] = civs;
@@ -57,100 +104,124 @@ const unitsOf = (g, id) => [...g.units.values()].filter(u => u.civ === id);
   const [a1, a2] = unitsOf(game, A.id);
   const [b1] = unitsOf(game, B.id);
   [a1.x, a1.y] = hex; [a2.x, a2.y] = hex; [b1.x, b1.y] = hex;
-  const r = game.resolveExecution();
-  check(r.deaths.includes(b1.id) && !game.units.has(b1.id), '수 우위: 소수 유닛 소멸');
-  check(a1.stunned === 1 && a2.stunned === 1, '수 우위: 승자 1턴 행동불능');
-  check(game.civs.get(B.id).alive === true, '유닛 남은 문명은 생존');
+  game.resolveExecution();
+  const bCap = game.civs.get(B.id).capital;
+  check(b1.x === bCap[0] && b1.y === bCap[1], '수 우위: 소수 측 후퇴');
+  check(game.units.size === 2 * START_UNITS, '유닛 소멸 없음');
 }
 
-// ── 3. 기술 우위 + 점령 + 위임 (3인: 점령해도 게임이 끝나지 않도록)
+// ── 6. 방어 기술: 자기 영토에서 +1
+{
+  const { game, civs } = newGame(2);
+  const [A, B] = civs;
+  game.civs.get(A.id).tech.military = 1;  // 공격 1
+  game.civs.get(B.id).tech.defense = 1;   // 방어 1
+  const hex = isolated[23];
+  game.setTile(key(hex), B.id);           // B의 영토
+  const ua = unitsOf(game, A.id)[0], ub = unitsOf(game, B.id)[0];
+  [ua.x, ua.y] = hex; [ub.x, ub.y] = hex;
+  game.resolveExecution();
+  check(ua.stunned === 2 && ub.stunned === 2 && ub.x === hex[0], '자기 영토 방어 → 동률 (후퇴 없음)');
+  // 공격 기술 2로 재도전
+  for (const u of game.units.values()) u.stunned = 0;
+  game.civs.get(A.id).tech.military = 2;
+  game.resolveExecution();
+  const bCap = game.civs.get(B.id).capital;
+  check(ub.x === bCap[0] && ub.y === bCap[1], '방어 초과 공격 → 수비 측 후퇴');
+}
+
+// ── 7. 수도 함락 → 점령(예속)·유닛/영토 편입·위임
 {
   const { game, civs } = newGame(3);
   const [A, B] = civs;
-  game.civs.get(A.id).tech.military = 2;
-  const hex = isolated[23];
-  const aUnits = unitsOf(game, A.id);
-  for (const u of unitsOf(game, B.id)) { [u.x, u.y] = hex; }
-  [aUnits[0].x, aUnits[0].y] = hex;
-  const r = game.resolveExecution();
-  check(unitsOf(game, B.id).length === 0, '기술 우위: 상대 전멸');
   const bCiv = game.civs.get(B.id);
-  check(bCiv.alive === false && bCiv.conqueredBy === A.id, '인구 0 → 점령');
-  check(!r.gameover, '3인 게임: 점령해도 계속 진행');
-  const delegated = [...game.units.values()].find(u => u.controller === B.id);
-  check(!!delegated && delegated.civ === A.id, '점령국 유닛 1기 위임');
-  check(r.conquests.length === 1 && r.delegations.length === 1, '점령·위임 브로드캐스트 데이터');
+  const bCap = bCiv.capital;
+  // B 유닛들을 수도에서 치우고, A 유닛을 수도 옆에서 진입시킴
+  const bUnits = unitsOf(game, B.id);
+  const nb = world.neighbors(bCap[0], bCap[1]).find(([x, y]) => world.isLand(x, y));
+  const ua = unitsOf(game, A.id)[0];
+  [ua.x, ua.y] = nb;
+  const mo = game.moveOrder(A.id, ua.id, bCap);
+  check(mo.ok && mo.path.length === 1, '수도 진입 경로');
+  const r = game.resolveExecution();
+  check(r.conquests.length === 1 && r.conquests[0].civId === B.id, '수도 함락 → 점령');
+  check(!bCiv.alive && bCiv.conqueredBy === A.id, '예속 상태');
+  check(bUnits.every(u => u.civ === A.id), '유닛은 점령국 소속으로 편입');
+  check(game.territory.get(key(bCap)) === A.id, '영토 이전');
+  check([...game.units.values()].some(u => u.controller === B.id), '위임 유닛 부여');
+  check(!r.gameover, '3인 게임: 계속 진행');
+}
 
-  const nb = world.neighbors(delegated.x, delegated.y).find(([x, y]) => world.isLand(x, y));
-  if (nb) {
-    check(game.moveOrder(B.id, delegated.id, nb).ok === true, '예속국: 위임 유닛 이동 가능');
+// ── 8. 동맹 영토는 통과해도 뺏지 않음
+{
+  const { game, civs } = newGame(2);
+  const [A, B] = civs;
+  game.proposeAlly(A.id, B.id);
+  game.acceptAlly(B.id, A.id);
+  const hex = isolated[24];
+  game.setTile(key(hex), B.id);
+  game.claim(hex[0], hex[1], A.id);
+  check(game.territory.get(key(hex)) === B.id, '동맹 영토 존중');
+  game.removeAlliance(A.id, B.id);
+  game.claim(hex[0], hex[1], A.id);
+  check(game.territory.get(key(hex)) === A.id, '동맹 해제 후엔 점령 가능');
+}
+
+// ── 9. 기본 이동력 2 (육지)
+{
+  const { game, civs } = newGame(1);
+  const A = civs[0];
+  const u = unitsOf(game, A.id)[0];
+  let mo = null;
+  for (const cand of isolated) {
+    const p = game.findPath(u.x, u.y, cand[0], cand[1]);
+    if (p && p.length >= 4 && p.every(([px, py]) => world.isLand(px, py))) {
+      mo = game.moveOrder(A.id, u.id, cand);
+      break;
+    }
   }
-  const otherA = [...game.units.values()].find(u => u.civ === A.id && u.controller == null);
-  check(game.moveOrder(B.id, otherA.id, [otherA.x, otherA.y]).ok === false, '예속국: 다른 유닛 명령 불가');
-  check(game.spawnOrder(B.id, [delegated.x, delegated.y]).reason === 'dead', '예속국: 생산 불가');
-
-  game._delegations = [];
-  game.killUnit(delegated.id);
-  const re = [...game.units.values()].find(u => u.controller === B.id);
-  check(!!re && re.id !== delegated.id, '위임 유닛 사망 시 재위임');
-}
-
-// ── 4. 생산 성공
-{
-  const { game, civs } = newGame(1);
-  const A = civs[0];
-  const civ = game.civs.get(A.id);
-  civ.resources.meat = 5; civ.resources.grain = 5;
-  const u = unitsOf(game, A.id)[0];
-  const so = game.spawnOrder(A.id, [u.x, u.y]);
-  check(so.ok === true, '생산 예약 접수');
-  const r = game.resolveExecution();
-  check(r.births.length === 1 && unitsOf(game, A.id).length === 4, '실행 턴에 유닛 생산');
-  check(r.births[0].x === u.x && r.births[0].y === u.y, '생산 위치 = 예약 헥스');
-}
-
-// ── 5. 인구 상한
-{
-  const { game, civs } = newGame(1);
-  const A = civs[0];
-  const u = unitsOf(game, A.id)[0];
-  for (let i = 0; i < UNIT_CAP - 3; i++) {
-    const uid = game.nextUnitId++;
-    game.units.set(uid, { id: uid, civ: A.id, x: u.x, y: u.y, stunned: 0 });
+  if (mo && mo.ok) {
+    game.resolveExecution();
+    check(u.x === mo.path[1][0] && u.y === mo.path[1][1], '육지 기본 이동력 2 (턴당 2칸)');
+    game.resolveExecution();
+    check(u.x === mo.path[3][0] && u.y === mo.path[3][1], '2턴차에 4칸째 도달');
+  } else {
+    check(false, '육지 기본 이동력 2 (경로 탐색 실패)');
   }
-  check(game.spawnOrder(A.id, [u.x, u.y]).reason === 'cap', `상한 ${UNIT_CAP}기에서 생산 거부`);
 }
 
-// ── 6. 자원 부족 → 실행 시 실패 통지
+// ── 10. 바다 이동: 턴당 1칸, 영토화 없음
 {
   const { game, civs } = newGame(1);
   const A = civs[0];
   const u = unitsOf(game, A.id)[0];
-  check(game.spawnOrder(A.id, [u.x, u.y]).ok === true, '자원 없어도 예약은 가능');
-  const r = game.resolveExecution();
-  check(r.spawnFails.some(f => f.civId === A.id && f.reason === 'cost'), '실행 시 자원 부족 실패');
-  check(unitsOf(game, A.id).length === 3, '유닛 수 불변');
-}
-
-// ── 7. 유닛 없는 헥스 생산 거부
-{
-  const { game, civs } = newGame(1);
-  const A = civs[0];
-  const empty = isolated.find(([x, y]) => ![...game.units.values()].some(u => u.x === x && u.y === y));
-  check(game.spawnOrder(A.id, empty).reason === 'nounit', '내 유닛 없는 헥스 생산 거부');
-}
-
-// ── 8. 3세력 전투: 최강 단독 생존
-{
-  const { game, civs } = newGame(3);
-  const [A, B, C] = civs;
-  game.civs.get(A.id).tech.military = 2;
-  const hex = isolated[25];
-  const ua = unitsOf(game, A.id)[0], ub = unitsOf(game, B.id)[0], uc = unitsOf(game, C.id)[0];
-  [ua.x, ua.y] = hex; [ub.x, ub.y] = hex; [uc.x, uc.y] = hex;
-  const r = game.resolveExecution();
-  check(!game.units.has(ub.id) && !game.units.has(uc.id) && game.units.has(ua.id), '3세력: 최강만 생존');
-  check(ua.stunned === 1, '3세력: 승자 1턴 행동불능');
+  // 해안(육지) → s1(바다) → s2(어떤 육지와도 인접하지 않은 먼바다)
+  const nearLand = ([x, y]) => world.neighbors(x, y).some(([nx, ny]) => world.isLand(nx, ny));
+  let coast = null, s2 = null;
+  outer:
+  for (let y = 1; y < world.h - 1; y++) {
+    for (let x = 0; x < world.w; x++) {
+      if (!world.isLand(x, y)) continue;
+      for (const nb of world.neighbors(x, y)) {
+        if (world.isLand(nb[0], nb[1])) continue;
+        for (const nb2 of world.neighbors(nb[0], nb[1])) {
+          if (!world.isLand(nb2[0], nb2[1]) && !nearLand(nb2)) {
+            coast = [x, y]; s2 = nb2;
+            break outer;
+          }
+        }
+      }
+    }
+  }
+  [u.x, u.y] = coast;
+  const mo = game.moveOrder(A.id, u.id, s2);
+  check(mo.ok, '바다 목표 이동 명령 허용');
+  game.resolveExecution();
+  check(!world.isLand(u.x, u.y) && u.x === mo.path[0][0] && u.y === mo.path[0][1], '바다는 턴당 1칸 (이동력 2 소모)');
+  check(game.territory.get(u.x + ',' + u.y) == null, '바다는 영토화되지 않음');
+  game.resolveExecution();
+  const last = mo.path[mo.path.length - 1];
+  check(u.x === last[0] && u.y === last[1], '2턴차에 바다 목표 도달');
 }
 
 console.log(fail === 0 ? '\n모든 테스트 통과' : `\n실패 ${fail}건`);

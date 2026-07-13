@@ -1,9 +1,10 @@
-// 접속·로비·상태 동기화·HUD·유닛 명령·연구·외교·채팅
+// 접속·로비·상태 동기화·HUD·유닛 명령·연구·외교·채팅 (영토전 v2)
 (() => {
   const state = {
     map: null,
     civs: new Map(),
     units: new Map(),
+    territory: new Map(),  // 'x,y' -> civId
     myOrders: new Map(),
     selected: null,
     resources: { meat: 0, grain: 0, wood: 0, iron: 0 },
@@ -11,7 +12,7 @@
     proposals: new Set(),
     queuedResearch: null,
     you: null,
-    gameState: 'LOBBY',   // LOBBY | RUNNING | ENDED
+    gameState: 'LOBBY',
     phase: 'LOBBY',
     turn: 1,
     turnLimit: 120,
@@ -25,14 +26,14 @@
   const REASON_KO = {
     phase: '지금은 명령할 수 없습니다 (회의 턴에만 가능)', unit: '내 유닛이 아닙니다',
     target: '이동할 수 없는 지형입니다', path: '길이 없습니다 (바다로 막힘)',
-    cap: '인구 상한(12기)에 도달했습니다', cost: '자원이 부족합니다',
-    nounit: '해당 헥스에 내 유닛이 없습니다', dead: '점령된 문명은 사용할 수 없습니다',
+    cost: '자원이 부족합니다', dead: '점령된 문명은 사용할 수 없습니다',
     max: '이미 최고 레벨입니다', branch: '알 수 없는 연구입니다',
     already: '이미 동맹입니다', noproposal: '해당 제안이 없습니다',
     notally: '동맹이 아닙니다', civ: '대상이 올바르지 않습니다',
   };
-  const TECH_KO = { military: '군사', gather: '채집', move: '이동', growth: '인구' };
-  const TECH_RES_KO = { military: '철', gather: '목재', move: '곡식', growth: '고기' };
+  const TECH_KO = { military: '군사', defense: '방어', gather: '채집', move: '이동' };
+  const TECH_RES_KO = { military: '철', defense: '고기', gather: '목재', move: '곡식' };
+  const TECH_DESC = { military: '전투력 +1', defense: '내 영토 전투 +1', gather: '채취 +20%', move: '이동력 +1/3Lv (기본 2, 바다는 2 소모)' };
   let ws;
 
   const isMine = (u) => u.civ === state.you || u.controller === state.you;
@@ -40,6 +41,11 @@
   const pairKey = (a, b) => Math.min(a, b) + ':' + Math.max(a, b);
   const isAlly = (id) => state.you != null && state.alliances.has(pairKey(state.you, id));
   const typing = () => document.activeElement === $('chatInput') || document.activeElement === $('nameInput');
+  const myTiles = () => {
+    let n = 0;
+    for (const v of state.territory.values()) if (v === state.you) n++;
+    return n;
+  };
 
   function connect(name) {
     const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
@@ -63,12 +69,22 @@
     $('lobbyHud').style.display = (s === 'LOBBY' && !state.spectator) ? '' : 'none';
   }
 
+  function applyTerritory(list) {
+    for (const [x, y, civId] of list || []) {
+      const k = x + ',' + y;
+      if (civId == null) state.territory.delete(k);
+      else state.territory.set(k, civId);
+    }
+  }
+
   function handle(msg) {
     switch (msg.type) {
       case 'welcome': {
         state.map = msg.map;
         state.civs = new Map(msg.civs.map(c => [c.id, c]));
         state.units = new Map((msg.units || []).map(u => [u.id, u]));
+        state.territory = new Map();
+        applyTerritory(msg.territory);
         state.phase = msg.phase; state.turn = msg.turn; state.endsAt = msg.endsAt;
         state.turnLimit = msg.turnLimit || 120;
         state.ended = !!msg.ended;
@@ -104,13 +120,15 @@
       }
       case 'gameStarted': {
         state.units = new Map((msg.units || []).map(u => [u.id, u]));
+        state.territory = new Map();
+        applyTerritory(msg.territory);
         state.phase = msg.phase; state.turn = msg.turn; state.endsAt = msg.endsAt;
         setGameState('RUNNING');
         if (!state.spectator && state.you != null) {
           const me = state.civs.get(state.you);
           if (me) Render.centerOn(me.capital[0], me.capital[1]);
         }
-        toast('게임 시작! 회의 턴에 유닛에게 명령을 내리세요');
+        toast('게임 시작! 유닛을 움직여 영토를 넓히세요');
         updateHud();
         break;
       }
@@ -121,6 +139,7 @@
           if (u.civ === msg.civId) state.units.delete(u.id);
           else if (u.controller === msg.civId) u.controller = null;
         }
+        for (const [k, v] of [...state.territory]) if (v === msg.civId) state.territory.delete(k);
         if (c) toast(`${c.name}이(가) 서버에서 제외되었습니다`);
         renderPlayers();
         break;
@@ -140,6 +159,7 @@
       case 'civJoined': {
         state.civs.set(msg.civ.id, msg.civ);
         for (const u of msg.units || []) state.units.set(u.id, u);
+        applyTerritory(msg.territory);
         if (msg.civ.id !== state.you) toast(`${msg.civ.name} 입장 (${msg.civ.player})`);
         renderPlayers();
         break;
@@ -175,22 +195,17 @@
               const rest = path.slice(i + 1);
               if (rest.length) state.myOrders.set(mv.unitId, rest);
               else state.myOrders.delete(mv.unitId);
+            } else if (state.civs.get(u?.civ)?.capital?.join() === [mv.x, mv.y].join()) {
+              state.myOrders.delete(mv.unitId); // 후퇴로 경로 무효화
             }
           }
         }
 
+        applyTerritory(msg.captures);
+
         for (const s of msg.stuns || []) {
           const u = state.units.get(s.unitId);
           if (u) u.stunned = s.turns;
-        }
-        for (const id of msg.deaths || []) {
-          state.units.delete(id);
-          state.myOrders.delete(id);
-          if (state.selected === id) state.selected = null;
-        }
-        for (const nu of msg.births || []) {
-          state.units.set(nu.id, nu);
-          if (nu.civ === state.you) toast('새 인구 유닛이 태어났습니다');
         }
         for (const d of msg.delegations || []) {
           const u = state.units.get(d.unitId);
@@ -205,9 +220,9 @@
         for (const b of msg.battles || []) {
           const mine = b.civs.find(c => c.civId === state.you);
           if (!mine) continue;
-          if (mine.lost > 0) toast(`전투 패배! 유닛 ${mine.lost}기 잃음`);
+          if (mine.lost > 0) toast(`전투 패배 — 유닛이 수도로 후퇴합니다`);
           else if (b.civs.every(c => c.lost === 0)) toast('전투 — 전투력 동률, 양측 행동불능');
-          else toast('전투 승리!');
+          else toast('전투 승리! 적이 후퇴했습니다');
         }
         for (const [a, b] of msg.allyLeft || []) {
           state.alliances.delete(pairKey(a, b));
@@ -216,8 +231,9 @@
         for (const cq of msg.conquests || []) {
           const c = state.civs.get(cq.civId);
           if (c) { c.alive = false; c.conqueredBy = cq.by; }
-          if (cq.civId === state.you) toast(`게임오버 — ${civName(cq.by)}에게 점령되었습니다. 위임 유닛으로 계속 플레이합니다`);
-          else if (cq.by === state.you) toast(`${civName(cq.civId)}을(를) 점령했습니다!`);
+          for (const u of state.units.values()) if (u.civ === cq.civId) u.civ = cq.by;
+          if (cq.civId === state.you) toast(`수도 함락! ${civName(cq.by)}에게 점령되었습니다. 위임 유닛으로 계속 플레이합니다`);
+          else if (cq.by === state.you) toast(`${civName(cq.civId)}의 수도를 함락했습니다!`);
           else toast(`${civName(cq.civId)}이(가) ${civName(cq.by)}에게 점령되었습니다`);
         }
         for (const ab of msg.absorptions || []) {
@@ -234,12 +250,6 @@
       }
       case 'resources': {
         state.resources = msg.resources;
-        if (msg.gained) {
-          const parts = [];
-          const KO = { meat: '고기', grain: '곡식', wood: '목재', iron: '철' };
-          for (const [k, v] of Object.entries(msg.gained)) if (v > 0) parts.push(`${KO[k]} +${v}`);
-          if (parts.length) toast(parts.join(' · '));
-        }
         updateHud();
         break;
       }
@@ -250,15 +260,6 @@
       }
       case 'orderRejected': {
         toast(REASON_KO[msg.reason] || '명령이 거부되었습니다');
-        break;
-      }
-      case 'spawnAck': {
-        toast('생산 예약 완료 — 실행 턴에 유닛이 생성됩니다');
-        break;
-      }
-      case 'spawnRejected':
-      case 'spawnFailed': {
-        toast('생산 실패: ' + (REASON_KO[msg.reason] || msg.reason));
         break;
       }
       case 'researchAck': {
@@ -299,6 +300,26 @@
       }
       case 'allyRejected': {
         toast('외교 실패: ' + (REASON_KO[msg.reason] || msg.reason));
+        break;
+      }
+      case 'delegations': {
+        for (const d of msg.delegations || []) {
+          const u = state.units.get(d.unitId);
+          if (u) u.controller = d.controller;
+          if (d.controller === state.you) toast(`점령국이 유닛 #${d.unitId}을 위임했습니다`);
+          if (d.controller == null && state.selected === d.unitId) state.selected = null;
+        }
+        updateHud();
+        renderPlayers();
+        break;
+      }
+      case 'delegateAck': {
+        toast(`${civName(msg.civId)}에 위임 유닛 ${msg.count}기 설정`);
+        renderPlayers();
+        break;
+      }
+      case 'delegateRejected': {
+        toast('위임 설정 실패: ' + (REASON_KO[msg.reason] || msg.reason));
         break;
       }
       case 'chat': {
@@ -375,27 +396,9 @@
 
     if (state.selected != null) {
       if (state.phase !== 'MEETING') { toast('회의 턴에만 명령할 수 있습니다'); return; }
-      if (state.map.rows[hy][hx] === '~') { toast('바다로는 이동할 수 없습니다'); return; }
       send({ type: 'order.move', unitId: state.selected, target: [hx, hy] });
     }
   });
-
-  function requestSpawn() {
-    if (state.spectator || state.you == null || state.ended || state.gameState !== 'RUNNING') return;
-    const me = state.civs.get(state.you);
-    if (me && !me.alive) { toast(REASON_KO.dead); return; }
-    let hex = null;
-    if (state.selected != null) {
-      const u = state.units.get(state.selected);
-      if (u && u.civ === state.you) hex = [u.x, u.y];
-    }
-    if (!hex) {
-      const first = [...state.units.values()].find(u => u.civ === state.you);
-      if (first) hex = [first.x, first.y];
-    }
-    if (!hex) { toast('생산할 유닛 위치가 없습니다'); return; }
-    send({ type: 'order.spawn', hex });
-  }
 
   window.addEventListener('keydown', (e) => {
     if (typing()) return;
@@ -404,13 +407,11 @@
       send({ type: 'order.stop', unitId: state.selected });
       toast('이동 취소');
     }
-    if (e.key === 'b') requestSpawn();
     if (e.key === 'Enter' && state.map && !state.spectator) {
       e.preventDefault();
       $('chatInput').focus();
     }
   });
-  $('spawnBtn').addEventListener('click', requestSpawn);
 
   for (const btn of document.querySelectorAll('.tech-btn')) {
     btn.addEventListener('click', () => {
@@ -427,23 +428,21 @@
     if (!me.alive) {
       const delegated = [...state.units.values()].filter(u => u.controller === state.you).length;
       $('myInfo').textContent = `점령됨 — ${civName(me.conqueredBy)} 예속 (위임 유닛 ${delegated}기)`;
-      $('spawnBtn').disabled = true;
     } else {
-      const myCount = [...state.units.values()].filter(u => u.civ === state.you).length;
-      const score = (me.tech.military + me.tech.gather + me.tech.move + me.tech.growth) + myCount;
-      $('myInfo').textContent = lobby ? '로비 대기 중' : `인구 ${myCount}/12 · 점수 ${score}`;
-      $('spawnBtn').disabled = lobby;
+      const tiles = myTiles();
+      const score = (me.tech.military + me.tech.defense + me.tech.gather + me.tech.move) + tiles;
+      $('myInfo').textContent = lobby ? '로비 대기 중' : `영토 ${tiles} · 점수 ${score}`;
     }
     const r = state.resources;
     $('resHud').textContent = `고기 ${r.meat} · 곡식 ${r.grain} · 목재 ${r.wood} · 철 ${r.iron}`;
 
     for (const btn of document.querySelectorAll('.tech-btn')) {
       const br = btn.dataset.branch;
-      const lvl = me.tech[br];
+      const lvl = me.tech[br] || 0;
       const maxed = lvl >= 5;
       btn.textContent = maxed
         ? `${TECH_KO[br]} Lv${lvl} (최고)`
-        : `${TECH_KO[br]} Lv${lvl} → ${lvl + 1} (${TECH_RES_KO[br]} ${10 * (lvl + 1)})`;
+        : `${TECH_KO[br]} Lv${lvl} → ${lvl + 1} (${TECH_RES_KO[br]} ${20 * (lvl + 1)}) — ${TECH_DESC[br]}`;
       btn.disabled = maxed || !me.alive || state.spectator || lobby;
       btn.classList.toggle('queued', state.queuedResearch === br);
     }
@@ -491,6 +490,19 @@
           row.append(btn);
         }
       }
+      // 내 예속국이면 위임 유닛 수(1~3) 선택
+      if (state.you != null && c.conqueredBy === state.you && !state.spectator && !state.ended) {
+        const sel = document.createElement('select');
+        sel.className = 'delegate-sel';
+        const cur = [...state.units.values()].filter(u => u.controller === c.id).length;
+        for (let n = 1; n <= 3; n++) {
+          const o = new Option('위임 ' + n, String(n));
+          if (n === Math.max(1, cur)) o.selected = true;
+          sel.append(o);
+        }
+        sel.onchange = () => send({ type: 'vassal.delegate', civId: c.id, count: Number(sel.value) });
+        row.append(sel);
+      }
       $('playerList').append(row);
     }
     updateChatTargets();
@@ -527,7 +539,6 @@
     toastTimer = setTimeout(() => t.classList.remove('show'), 3000);
   }
 
-  // 페이즈 HUD + 렌더 루프
   function frame() {
     if (state.map) {
       const pn = $('phaseName');
@@ -554,7 +565,6 @@
   }
   requestAnimationFrame(frame);
 
-  // 입장 UI
   $('joinBtn').addEventListener('click', () => {
     const name = $('nameInput').value.trim();
     if (!name) { $('joinMsg').textContent = '이름을 입력하세요'; return; }

@@ -19,13 +19,10 @@
   #phaseTimer { font-size: 26px; font-weight: 800; font-variant-numeric: tabular-nums; }
   #turnLabel { font-size: 12px; color: #94a3b8; }
 
-  #myHud { top: 12px; left: 12px; max-width: 240px; }
+  #myHud { top: 12px; left: 12px; max-width: 250px; }
   #myFlag { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
   #myCountry { font-weight: 700; }
   #myHud .sub { font-size: 12px; color: #94a3b8; margin-top: 4px; }
-  #spawnBtn { display: block; width: 100%; margin-top: 8px; padding: 6px 10px; font-size: 12px; font-weight: 700; color: #0b1220; background: #4ade80; border: 0; border-radius: 6px; cursor: pointer; }
-  #spawnBtn:hover { background: #86efac; }
-  #spawnBtn:disabled { background: #334155; color: #64748b; cursor: default; }
 
   #techHud h3, #playersHud h3, #chatHud h3 { font-size: 12px; color: #94a3b8; margin-bottom: 6px; font-weight: 600; }
   #techHud { margin-top: 10px; border-top: 1px solid #263450; padding-top: 8px; }
@@ -44,6 +41,7 @@
   .ally-btn.accept { border-color: #4ade80; color: #4ade80; }
   .ally-btn.leave { border-color: #f87171; color: #f87171; }
   .tag-ally { flex: none; font-size: 10px; color: #4ade80; border: 1px solid #4ade80; border-radius: 4px; padding: 0 4px; }
+  .delegate-sel { flex: none; font-size: 10.5px; background: #1e293b; color: #d8b4fe; border: 1px solid #7c3aed; border-radius: 5px; padding: 1px 2px; }
 
   #chatHud { bottom: 52px; right: 12px; width: 300px; padding: 8px 10px; }
   #chatLog { height: 150px; overflow-y: auto; font-size: 12px; line-height: 1.5; margin-bottom: 6px; }
@@ -77,7 +75,7 @@
   .score-row.winner { color: #fbbf24; font-weight: 700; }
 
   #resHud { bottom: 12px; left: 12px; font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
-  #helpHud { bottom: 12px; right: 320px; font-size: 11px; color: #94a3b8; max-width: 320px; }
+  #helpHud { bottom: 12px; right: 320px; font-size: 11px; color: #94a3b8; max-width: 340px; }
 
   #toast { position: absolute; bottom: 58px; left: 50%; transform: translateX(-50%); background: rgba(13,20,36,.92); border: 1px solid #263450; border-radius: 8px; padding: 8px 16px; font-size: 13px; opacity: 0; transition: opacity .3s; pointer-events: none; }
   #toast.show { opacity: 1; }
@@ -94,19 +92,18 @@
 
 <div id="lobbyHud" class="hud" style="display:none">
   <h2>로비 대기 중</h2>
-  <p>관리자가 게임을 시작하면 유닛이 배치됩니다.<br>맵을 둘러보며 기다려 주세요.</p>
+  <p>관리자가 게임을 시작하면 수도에 유닛 3기가 배치됩니다.<br>유닛이 지나간 땅은 영토가 되고, 영토가 자원을 생산합니다.</p>
 </div>
 
 <div id="myHud" class="hud" style="display:none">
   <div><span id="myFlag"></span><span id="myCountry"></span></div>
   <div class="sub" id="myInfo"></div>
-  <button id="spawnBtn">유닛 생산 (고기5+곡식5)</button>
   <div id="techHud">
     <h3>연구 (실행 턴에 완료)</h3>
     <button class="tech-btn" data-branch="military"></button>
+    <button class="tech-btn" data-branch="defense"></button>
     <button class="tech-btn" data-branch="gather"></button>
     <button class="tech-btn" data-branch="move"></button>
-    <button class="tech-btn" data-branch="growth"></button>
   </div>
 </div>
 
@@ -142,7 +139,7 @@
 </div>
 
 <div id="resHud" class="hud" style="display:none"></div>
-<div id="helpHud" class="hud" style="display:none">클릭: 유닛 선택 → 목표 클릭: 이동 · B: 생산 · X: 이동 취소 · ESC: 해제 · Enter: 채팅 · 드래그/휠: 화면</div>
+<div id="helpHud" class="hud" style="display:none">클릭: 유닛 선택 → 목표 클릭: 이동(지나간 땅 점령, 바다는 느림) · 수도를 뺏기면 점령됨 · X: 취소 · ESC: 해제 · Enter: 채팅</div>
 
 <div id="toast"></div>
 
