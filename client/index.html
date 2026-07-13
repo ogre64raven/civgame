@@ -67,6 +67,14 @@
   #lobbyHud h2 { font-size: 15px; color: #a78bfa; margin-bottom: 4px; }
   #lobbyHud p { font-size: 12px; color: #94a3b8; }
 
+  #consentOverlay { position: fixed; inset: 0; background: rgba(5, 8, 16, .75); display: none; align-items: center; justify-content: center; z-index: 25; }
+  #consentBox { text-align: center; background: #0f172a; border: 1px solid #4ade80; border-radius: 14px; padding: 26px 34px; max-width: 380px; }
+  #consentBox h2 { font-size: 17px; color: #4ade80; margin-bottom: 10px; }
+  #consentBox p { font-size: 13.5px; line-height: 1.6; color: #e2e8f0; margin-bottom: 18px; }
+  .consent-btns { display: flex; gap: 10px; justify-content: center; }
+  .consent-btns button { padding: 8px 26px; font-size: 14px; font-weight: 700; border: 0; border-radius: 8px; cursor: pointer; }
+  #consentYes { background: #4ade80; color: #0b1220; }
+  #consentNo { background: #f87171; color: #0b1220; }
   #overOverlay { position: fixed; inset: 0; background: rgba(5, 8, 16, .9); display: none; align-items: center; justify-content: center; z-index: 20; }
   #overBox { text-align: center; background: #0f172a; border: 1px solid #263450; border-radius: 16px; padding: 36px 48px; max-height: 80vh; overflow-y: auto; }
   #overBox h1 { font-size: 26px; margin-bottom: 8px; }
@@ -79,6 +87,19 @@
 
   #toast { position: absolute; bottom: 58px; left: 50%; transform: translateX(-50%); background: rgba(13,20,36,.92); border: 1px solid #263450; border-radius: 8px; padding: 8px 16px; font-size: 13px; opacity: 0; transition: opacity .3s; pointer-events: none; }
   #toast.show { opacity: 1; }
+
+  #phaseBanner { position: fixed; top: 38%; left: 50%; transform: translate(-50%, -50%); font-size: 44px; font-weight: 800; letter-spacing: 4px; opacity: 0; pointer-events: none; z-index: 15; text-shadow: 0 2px 16px rgba(0,0,0,.75), 0 0 40px rgba(0,0,0,.5); }
+  #phaseBanner.meeting { color: #7dd3fc; }
+  #phaseBanner.execution { color: #fbbf24; }
+  #phaseBanner.start { color: #4ade80; }
+  #phaseBanner.show { animation: phasePop 1.8s ease forwards; }
+  @keyframes phasePop {
+    0% { opacity: 0; transform: translate(-50%, -50%) scale(.7); }
+    15% { opacity: 1; transform: translate(-50%, -50%) scale(1.05); }
+    25% { transform: translate(-50%, -50%) scale(1); }
+    70% { opacity: 1; }
+    100% { opacity: 0; transform: translate(-50%, -50%) scale(1); }
+  }
 </style>
 </head>
 <body>
@@ -130,6 +151,17 @@
   </div>
 </div>
 
+<div id="consentOverlay">
+  <div id="consentBox">
+    <h2>동맹 확장 동의</h2>
+    <p id="consentText"></p>
+    <div class="consent-btns">
+      <button id="consentYes">동의</button>
+      <button id="consentNo">거부</button>
+    </div>
+  </div>
+</div>
+
 <div id="overOverlay">
   <div id="overBox">
     <h1 id="overTitle">게임 종료</h1>
@@ -142,6 +174,7 @@
 <div id="helpHud" class="hud" style="display:none">클릭: 유닛 선택 → 목표 클릭: 이동(지나간 땅 점령, 바다는 느림) · 수도를 뺏기면 점령됨 · X: 취소 · ESC: 해제 · Enter: 채팅</div>
 
 <div id="toast"></div>
+<div id="phaseBanner"></div>
 
 <script src="render.js"></script>
 <script src="input.js"></script>

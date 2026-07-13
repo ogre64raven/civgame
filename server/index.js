@@ -25,6 +25,11 @@ function wsOfCiv(civId) {
   for (const c of wss.clients) if (c.civId === civId && c.readyState === 1) return c;
   return null;
 }
+// 동맹 확장 동의 요청 통지
+function notifyConsent(r) {
+  sendTo(wsOfCiv(r.consentNeeded), { type: 'allyConsentRequest', pair: r.pair });
+  for (const id of r.pair) sendTo(wsOfCiv(id), { type: 'allyConsentPending', approver: r.consentNeeded, pair: r.pair });
+}
 
 function makeGame() {
   const g = new Game(world, broadcast);
@@ -203,6 +208,7 @@ wss.on('connection', (ws) => {
         const r = game.proposeAlly(ws.civId, msg.civId);
         if (!r.ok) { sendTo(ws, { type: 'allyRejected', reason: r.reason }); break; }
         if (r.formed) broadcast({ type: 'allyFormed', pair: r.formed });
+        else if (r.consentNeeded) notifyConsent(r);
         else {
           sendTo(ws, { type: 'allyProposeAck', civId: msg.civId });
           sendTo(wsOfCiv(msg.civId), { type: 'allyProposed', from: ws.civId });
@@ -212,8 +218,20 @@ wss.on('connection', (ws) => {
       case 'ally.accept': {
         if (ws.civId == null) return;
         const r = game.acceptAlly(ws.civId, msg.civId);
-        if (r.ok) broadcast({ type: 'allyFormed', pair: r.formed });
-        else sendTo(ws, { type: 'allyRejected', reason: r.reason });
+        if (!r.ok) { sendTo(ws, { type: 'allyRejected', reason: r.reason }); break; }
+        if (r.formed) broadcast({ type: 'allyFormed', pair: r.formed });
+        else if (r.consentNeeded) notifyConsent(r);
+        break;
+      }
+      case 'ally.consent': {
+        if (ws.civId == null) return;
+        const r = game.consentAlly(ws.civId, msg.pair, !!msg.approve);
+        if (!r.ok) { sendTo(ws, { type: 'allyRejected', reason: r.reason }); break; }
+        if (r.formed) broadcast({ type: 'allyFormed', pair: r.formed });
+        else if (r.vetoed) {
+          for (const id of r.vetoed) sendTo(wsOfCiv(id), { type: 'allyVetoed', pair: r.vetoed, by: r.by });
+          sendTo(ws, { type: 'allyVetoed', pair: r.vetoed, by: r.by });
+        }
         break;
       }
       case 'ally.leave': {

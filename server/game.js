@@ -8,6 +8,7 @@ const START_UNITS = 3;                  // 문명당 유닛 수 (고정, 생성/
 const TECH_MAX = 5;
 const TECH_RES = { military: 'iron', defense: 'meat', gather: 'wood', move: 'grain' };
 const techCost = (targetLevel) => 20 * targetLevel;
+const ALLY_MAX = 3;                     // 동맹 그룹 최대 인원
 const ABSORB_RATIO = 0.8;               // 8:2 초과
 const ABSORB_TURNS = 3;                 // 연속 유지 턴
 const MIN_LANDMASS = 5;                 // 수도가 이보다 작은 섬이면 배정 제외
@@ -53,6 +54,7 @@ class Game {
     this.territoryByCiv = new Map();    // civId -> Set('x,y')
     this.allies = new Map();
     this.allyProposals = new Map();
+    this.allyConsents = new Map();      // 'a:b' -> { a, b, approver } (제3국 동의 대기)
     this.leaveOrders = [];
     this.absorbCounters = new Map();
     this.ended = false;
@@ -517,6 +519,9 @@ class Game {
     if (set) for (const other of [...set]) this.removeAlliance(civId, other);
     this.allyProposals.delete(civId);
     for (const s of this.allyProposals.values()) s.delete(civId);
+    for (const [k, req] of [...this.allyConsents]) {
+      if (req.a === civId || req.b === civId || req.approver === civId) this.allyConsents.delete(k);
+    }
     for (const key of [...this.absorbCounters.keys()]) {
       const [a, b] = key.split(':').map(Number);
       if (a === civId || b === civId) this.absorbCounters.delete(key);
@@ -595,6 +600,7 @@ class Game {
     if (!a || !b || fromId === toId) return { ok: false, reason: 'civ' };
     if (!a.alive || !b.alive) return { ok: false, reason: 'dead' };
     if (this.isAllied(fromId, toId)) return { ok: false, reason: 'already' };
+    if (new Set([...this.groupOf(fromId), ...this.groupOf(toId)]).size > ALLY_MAX) return { ok: false, reason: 'full' };
     if (this.allyProposals.get(fromId)?.has(toId)) return this.acceptAlly(fromId, toId);
     if (!this.allyProposals.has(toId)) this.allyProposals.set(toId, new Set());
     this.allyProposals.get(toId).add(fromId);
@@ -606,13 +612,57 @@ class Game {
     const a = this.civs.get(whoId), b = this.civs.get(fromId);
     if (!a || !b || !a.alive || !b.alive) return { ok: false, reason: 'dead' };
     if (!this.allyProposals.get(whoId)?.has(fromId)) return { ok: false, reason: 'noproposal' };
+    const union = new Set([...this.groupOf(whoId), ...this.groupOf(fromId)]);
+    if (union.size > ALLY_MAX) return { ok: false, reason: 'full' };
     this.allyProposals.get(whoId).delete(fromId);
     this.allyProposals.get(fromId)?.delete(whoId);
-    if (!this.allies.has(whoId)) this.allies.set(whoId, new Set());
-    if (!this.allies.has(fromId)) this.allies.set(fromId, new Set());
-    this.allies.get(whoId).add(fromId);
-    this.allies.get(fromId).add(whoId);
-    return { ok: true, formed: [whoId, fromId] };
+    // 기존 동맹국(제3국)이 있으면 동의 필요
+    const approvers = [...union].filter(id => id !== whoId && id !== fromId);
+    if (approvers.length > 0) {
+      const key = Math.min(whoId, fromId) + ':' + Math.max(whoId, fromId);
+      this.allyConsents.set(key, { a: whoId, b: fromId, approver: approvers[0] });
+      return { ok: true, consentNeeded: approvers[0], pair: [whoId, fromId] };
+    }
+    return this.formAlliance(whoId, fromId);
+  }
+
+  formAlliance(a, b) {
+    if (!this.allies.has(a)) this.allies.set(a, new Set());
+    if (!this.allies.has(b)) this.allies.set(b, new Set());
+    this.allies.get(a).add(b);
+    this.allies.get(b).add(a);
+    return { ok: true, formed: [a, b] };
+  }
+
+  // 동맹 그룹(연결 요소) — 자신 포함
+  groupOf(id) {
+    const out = new Set([id]);
+    let frontier = [id];
+    while (frontier.length) {
+      const next = [];
+      for (const cur of frontier) {
+        for (const nb of this.allies.get(cur) || []) {
+          if (!out.has(nb)) { out.add(nb); next.push(nb); }
+        }
+      }
+      frontier = next;
+    }
+    return out;
+  }
+
+  // 제3국의 동맹 확장 동의/거부
+  consentAlly(approverId, pair, approve) {
+    if (!Array.isArray(pair) || pair.length !== 2) return { ok: false, reason: 'civ' };
+    const key = Math.min(pair[0], pair[1]) + ':' + Math.max(pair[0], pair[1]);
+    const req = this.allyConsents.get(key);
+    if (!req || req.approver !== approverId) return { ok: false, reason: 'noconsent' };
+    this.allyConsents.delete(key);
+    if (!approve) return { ok: true, vetoed: [req.a, req.b], by: approverId };
+    const a = this.civs.get(req.a), b = this.civs.get(req.b);
+    if (!a || !b || !a.alive || !b.alive) return { ok: false, reason: 'dead' };
+    const union = new Set([...this.groupOf(req.a), ...this.groupOf(req.b)]);
+    if (union.size > ALLY_MAX) return { ok: false, reason: 'full' };
+    return this.formAlliance(req.a, req.b);
   }
 
   leaveAlly(fromId, toId) {

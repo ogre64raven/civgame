@@ -29,6 +29,7 @@
     cost: '자원이 부족합니다', dead: '점령된 문명은 사용할 수 없습니다',
     max: '이미 최고 레벨입니다', branch: '알 수 없는 연구입니다',
     already: '이미 동맹입니다', noproposal: '해당 제안이 없습니다',
+    full: '동맹은 최대 3개국까지입니다', noconsent: '유효하지 않은 동의 요청입니다',
     notally: '동맹이 아닙니다', civ: '대상이 올바르지 않습니다',
   };
   const TECH_KO = { military: '군사', defense: '방어', gather: '채집', move: '이동' };
@@ -128,6 +129,7 @@
           const me = state.civs.get(state.you);
           if (me) Render.centerOn(me.capital[0], me.capital[1]);
         }
+        showPhaseBanner('게임 시작!', 'start');
         toast('게임 시작! 유닛을 움직여 영토를 넓히세요');
         updateHud();
         break;
@@ -179,6 +181,8 @@
         state.phase = msg.phase; state.turn = msg.turn; state.endsAt = msg.endsAt;
         if (state.gameState === 'LOBBY') setGameState('RUNNING');
         if (msg.phase === 'MEETING') state.queuedResearch = null;
+        if (msg.phase === 'MEETING') showPhaseBanner(`턴 ${msg.turn} — 회의 턴`, 'meeting');
+        else if (msg.phase === 'EXECUTION') showPhaseBanner('실행 턴', 'execution');
         updateHud();
         break;
       }
@@ -292,6 +296,21 @@
         state.proposals.delete(b);
         if (a === state.you || b === state.you) toast(`동맹 성립: ${civName(a)} - ${civName(b)}`);
         renderPlayers();
+        break;
+      }
+      case 'allyConsentRequest': {
+        consentQueue.push(msg.pair);
+        showNextConsent();
+        break;
+      }
+      case 'allyConsentPending': {
+        toast(`동맹 보류 — ${civName(msg.approver)}의 동의를 기다립니다`);
+        break;
+      }
+      case 'allyVetoed': {
+        const [a, b] = msg.pair;
+        if (msg.by === state.you) toast(`${civName(a)} - ${civName(b)} 동맹 확장을 거부했습니다`);
+        else toast(`${civName(msg.by)}이(가) 동맹 확장을 거부했습니다`);
         break;
       }
       case 'allyLeaveAck': {
@@ -528,6 +547,36 @@
       box.append(row);
     }
     $('overOverlay').style.display = 'flex';
+  }
+
+  // ── 동맹 확장 동의 팝업
+  const consentQueue = [];
+  function showNextConsent() {
+    if ($('consentOverlay').style.display === 'flex') return;
+    const pair = consentQueue[0];
+    if (!pair) return;
+    const [a, b] = pair;
+    $('consentText').textContent =
+      `동맹국 ${civName(a)}이(가) ${civName(b)}와(과) 동맹을 맺으려 합니다. ` +
+      `동의하면 3국 동맹이 됩니다. 동의하시겠습니까?`;
+    $('consentOverlay').style.display = 'flex';
+  }
+  function answerConsent(approve) {
+    const pair = consentQueue.shift();
+    $('consentOverlay').style.display = 'none';
+    if (pair) send({ type: 'ally.consent', pair, approve });
+    showNextConsent();
+  }
+  $('consentYes').addEventListener('click', () => answerConsent(true));
+  $('consentNo').addEventListener('click', () => answerConsent(false));
+
+  // 화면 중앙 페이즈 전환 배너
+  function showPhaseBanner(text, cls) {
+    const b = $('phaseBanner');
+    b.textContent = text;
+    b.className = cls || '';
+    void b.offsetWidth; // 리플로우로 애니메이션 재시작
+    b.classList.add('show');
   }
 
   let toastTimer;

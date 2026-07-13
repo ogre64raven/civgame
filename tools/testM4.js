@@ -59,7 +59,9 @@ const unitsOf = (g, id) => [...g.units.values()].filter(u => u.civ === id);
   check(game.acceptAlly(B.id, A.id).ok && game.isAllied(A.id, B.id), '수락 → 성립');
   game.proposeAlly(A.id, C.id);
   const mutual = game.proposeAlly(C.id, A.id);
-  check(mutual.ok && !!mutual.formed, '상호 제안 → 즉시 성립');
+  check(mutual.ok && mutual.consentNeeded === B.id, '상호 제안 → 기존 동맹국 동의 대기');
+  game.consentAlly(B.id, mutual.pair, true);
+  check(game.isAllied(A.id, C.id), '동의 후 성립');
   game.leaveAlly(A.id, C.id);
   game.resolveExecution();
   check(!game.isAllied(A.id, C.id), '파기 → 실행 턴에 해체');
@@ -215,6 +217,44 @@ const unitsOf = (g, id) => [...g.units.values()].filter(u => u.civ === id);
   // 총량 보존
   const total = a.resources.iron + b.resources.iron + c.resources.iron;
   check(total === 4, `철 총량 보존 (${total})`);
+}
+
+// ── 10. 동맹 최대 3국 + 제3국 동의
+{
+  const { game, civs } = newGame(4);
+  const [A, B, C, D] = civs;
+  game.proposeAlly(A.id, B.id);
+  game.acceptAlly(B.id, A.id); // A-B 동맹
+  // A-C 확장 → B 동의 필요
+  game.proposeAlly(A.id, C.id);
+  const r = game.acceptAlly(C.id, A.id);
+  check(r.ok && r.consentNeeded === B.id, '확장 시 기존 동맹국 동의 필요');
+  check(!game.isAllied(A.id, C.id), '동의 전에는 미성립');
+  check(game.consentAlly(C.id, r.pair, true).ok === false, '당사자는 동의 불가');
+  const c1 = game.consentAlly(B.id, r.pair, true);
+  check(c1.ok && !!c1.formed && game.isAllied(A.id, C.id), '동의 → 3국 동맹 성립');
+  check(game.groupOf(A.id).size === 3, '동맹 그룹 3국');
+  // 4국째는 거부
+  check(game.proposeAlly(A.id, D.id).reason === 'full', '동맹 4국 확장 거부');
+  check(game.proposeAlly(D.id, C.id).reason === 'full', '외부에서의 4국 확장도 거부');
+}
+
+// ── 11. 제3국 거부(비토)
+{
+  const { game, civs } = newGame(3);
+  const [X, Y, Z] = civs;
+  game.proposeAlly(X.id, Y.id);
+  game.acceptAlly(Y.id, X.id);
+  game.proposeAlly(X.id, Z.id);
+  const rr = game.acceptAlly(Z.id, X.id);
+  const veto = game.consentAlly(Y.id, rr.pair, false);
+  check(veto.ok && !!veto.vetoed && !game.isAllied(X.id, Z.id), '거부 → 동맹 불성립');
+  check(game.isAllied(X.id, Y.id), '기존 동맹은 유지');
+  // 재시도 후 동의 → 성립
+  game.proposeAlly(X.id, Z.id);
+  const rr2 = game.acceptAlly(Z.id, X.id);
+  const ok2 = game.consentAlly(Y.id, rr2.pair, true);
+  check(ok2.ok && game.isAllied(X.id, Z.id), '재시도 + 동의 → 성립');
 }
 
 console.log(fail === 0 ? '\n모든 테스트 통과' : `\n실패 ${fail}건`);
