@@ -11,7 +11,7 @@ const topo = require('world-atlas/land-110m.json');
 const land = topojson.feature(topo, topo.objects.land);
 
 // 그리드 설정 (odd-r offset, pointy-top). 위도 85N ~ 60S (남극 제외)
-const W = 90, H = 45, LAT_TOP = 85, LAT_SPAN = 145;
+const W = 135, H = 68, LAT_TOP = 85, LAT_SPAN = 145;
 
 function hexToLonLat(x, y) {
   const lat = LAT_TOP - ((y + 0.5) / H) * LAT_SPAN;
@@ -50,9 +50,9 @@ function isLandHex(x, y) {
 // 지형: ~ 바다 / g 초원(곡식) / p 평원(고기) / f 숲(목재) / m 산(철)
 function terrainFor(x, y) {
   const r = hash(x, y);
-  if (r < 0.15) return 'm';
-  if (r < 0.42) return 'f';
-  if (r < 0.71) return 'g';
+  if (r < 0.22) return 'm';
+  if (r < 0.47) return 'f';
+  if (r < 0.74) return 'g';
   return 'p';
 }
 

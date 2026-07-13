@@ -177,21 +177,23 @@ const key = (h) => h[0] + ',' + h[1];
   const { game, civs } = newGame(1);
   const A = civs[0];
   const u = unitsOf(game, A.id)[0];
+  const flat = ([px, py]) => world.isLand(px, py) && world.terrain(px, py) !== 'm';
   let mo = null;
   for (const cand of isolated) {
     const p = game.findPath(u.x, u.y, cand[0], cand[1]);
-    if (p && p.length >= 4 && p.every(([px, py]) => world.isLand(px, py))) {
+    if (p && p.length >= 5 && p.every(flat)) {
       mo = game.moveOrder(A.id, u.id, cand);
       break;
     }
   }
   if (mo && mo.ok) {
     game.resolveExecution();
-    check(u.x === mo.path[1][0] && u.y === mo.path[1][1], '육지 기본 이동력 2 (턴당 2칸)');
+    check(u.x === mo.path[2][0] && u.y === mo.path[2][1], '평지 기본 이동력 3 (턴당 3칸)');
     game.resolveExecution();
-    check(u.x === mo.path[3][0] && u.y === mo.path[3][1], '2턴차에 4칸째 도달');
+    const idx2 = Math.min(5, mo.path.length - 1);
+    check(u.x === mo.path[idx2][0] && u.y === mo.path[idx2][1], '2턴차에 6칸째(또는 끝) 도달');
   } else {
-    check(false, '육지 기본 이동력 2 (경로 탐색 실패)');
+    check(false, '평지 기본 이동력 3 (경로 탐색 실패)');
   }
 }
 
@@ -222,11 +224,63 @@ const key = (h) => h[0] + ',' + h[1];
   const mo = game.moveOrder(A.id, u.id, s2);
   check(mo.ok, '바다 목표 이동 명령 허용');
   game.resolveExecution();
-  check(!world.isLand(u.x, u.y) && u.x === mo.path[0][0] && u.y === mo.path[0][1], '바다는 턴당 1칸 (이동력 2 소모)');
+  check(!world.isLand(u.x, u.y) && u.x === mo.path[0][0] && u.y === mo.path[0][1], '바다는 턴당 1칸 (이동력 3 소모)');
   check(game.territory.get(u.x + ',' + u.y) == null, '바다는 영토화되지 않음');
   game.resolveExecution();
   const last = mo.path[mo.path.length - 1];
   check(u.x === last[0] && u.y === last[1], '2턴차에 바다 목표 도달');
+}
+
+// ── 10.5 지형별 이동 비용
+{
+  const { game } = newGame(1);
+  // 지형 샘플로 비용 함수 직접 검증
+  let flat = null, mtn = null, sea = null;
+  for (let y = 0; y < world.h && !(flat && mtn && sea); y++)
+    for (let x = 0; x < world.w && !(flat && mtn && sea); x++) {
+      const t = world.terrain(x, y);
+      if (!flat && (t === 'g' || t === 'p' || t === 'f')) flat = [x, y];
+      if (!mtn && t === 'm') mtn = [x, y];
+      if (!sea && t === '~') sea = [x, y];
+    }
+  check(game.moveCost(flat[0], flat[1]) === 1, '평지 이동 비용 1');
+  check(game.moveCost(mtn[0], mtn[1]) === 2, '산지 이동 비용 2');
+  check(game.moveCost(sea[0], sea[1]) === 3, '바다 이동 비용 3');
+
+  // 산 2연속 경로: 첫 턴에 1개(2)만 넘고 멈춤 (2+2 > 3)
+  const A = game.civs.values().next().value;
+  const u = unitsOf(game, A.id)[0];
+  let F = null, path2 = null;
+  outer:
+  for (let y = 1; y < world.h - 1; y++) {
+    for (let x = 0; x < world.w; x++) {
+      const t = world.terrain(x, y);
+      if (t === '~' || t === 'm') continue;
+      for (const nb of world.neighbors(x, y)) {
+        if (world.terrain(nb[0], nb[1]) !== 'm') continue;
+        for (const nb2 of world.neighbors(nb[0], nb[1])) {
+          if (world.terrain(nb2[0], nb2[1]) === 'm' && !(nb2[0] === x && nb2[1] === y)) {
+            [u.x, u.y] = [x, y];
+            const mo = game.moveOrder(A.id, u.id, nb2);
+            if (mo.ok && mo.path.length === 2 &&
+                mo.path.every(([px, py]) => world.terrain(px, py) === 'm')) {
+              F = [x, y]; path2 = mo.path;
+              break outer;
+            }
+            game.cancelOrder(A.id, u.id);
+          }
+        }
+      }
+    }
+  }
+  if (path2) {
+    game.resolveExecution();
+    check(u.x === path2[0][0] && u.y === path2[0][1], '산지 연속: 첫 턴 1칸 (이동력 소진)');
+    game.resolveExecution();
+    check(u.x === path2[1][0] && u.y === path2[1][1], '2턴차에 두 번째 산 도달');
+  } else {
+    check(true, '산 2연속 직행 경로 없음 (비용 검증으로 대체)');
+  }
 }
 
 // ── 11. 수도 HP: 기술 총합 비례 + 회복 + 군사 기술 피해

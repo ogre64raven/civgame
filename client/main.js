@@ -34,7 +34,7 @@
   };
   const TECH_KO = { military: '군사', defense: '방어', gather: '채집', move: '이동' };
   const TECH_RES_KO = { military: '철', defense: '고기', gather: '목재', move: '곡식' };
-  const TECH_DESC = { military: '전투력 +1', defense: '내 영토 전투 +1', gather: '채취 +20%', move: '이동력 +1/3Lv (기본 2, 바다는 2 소모)' };
+  const TECH_DESC = { military: '전투력 +1', defense: '내 영토 전투 +1', gather: '채취 +20%', move: '이동력 +1/3Lv (기본 3 · 평지1/산2/바다3)' };
   let ws;
 
   const isMine = (u) => u.civ === state.you || u.controller === state.you;

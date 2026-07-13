@@ -209,11 +209,11 @@ class Game {
       if (!u) { this.orders.delete(unitId); continue; }
       if (stunnedNow.has(unitId)) continue;
       const civ = this.civs.get(u.civ);
-      // 이동력: 기본 2 (+이동 기술 3Lv마다 1). 육지 1, 바다 2 소모 → 바다는 턴당 1칸
-      let budget = 2 + Math.floor((civ.tech.move || 0) / 3);
+      // 이동력: 기본 3 (+이동 기술 3Lv마다 1). 평지 1, 산지 2, 바다 3 소모
+      let budget = 3 + Math.floor((civ.tech.move || 0) / 3);
       while (order.idx < order.path.length) {
         const [nx, ny] = order.path[order.idx];
-        const cost = this.world.isLand(nx, ny) ? 1 : 2;
+        const cost = this.moveCost(nx, ny);
         if (cost > budget) break;
         budget -= cost;
         order.idx++;
@@ -718,7 +718,15 @@ class Game {
     return out;
   }
 
-  // 다익스트라 최단 경로 (이동력 비용: 육지 1, 바다 2). 시작 제외, 목표 포함.
+  // 지형별 이동 비용: 평지(초원·평원·숲) 1, 산지 2, 바다 3
+  moveCost(x, y) {
+    const t = this.world.terrain(x, y);
+    if (t === '~') return 3;
+    if (t === 'm') return 2;
+    return 1;
+  }
+
+  // 다익스트라 최단 경로 (지형별 이동 비용 적용). 시작 제외, 목표 포함.
   findPath(sx, sy, tx, ty) {
     if (sx === tx && sy === ty) return [];
     const key = (x, y) => x + ',' + y;
@@ -742,7 +750,7 @@ class Game {
           return path.reverse();
         }
         for (const [nx, ny] of this.world.neighbors(cx, cy)) {
-          const cost = this.world.isLand(nx, ny) ? 1 : 2;
+          const cost = this.moveCost(nx, ny);
           const nd = d + cost;
           const nk = key(nx, ny);
           if (nd < (dist.get(nk) ?? Infinity)) {
