@@ -40,7 +40,7 @@ const Render = (() => {
   const mat = (color, opts) => new THREE.MeshLambertMaterial(Object.assign({ color }, opts || {}));
   const GEO = {
     hex1: new THREE.CylinderGeometry(HEX * 0.94, HEX * 0.94, 1, 6),
-    overlay: new THREE.CylinderGeometry(HEX * 0.9, HEX * 0.9, 0.8, 6),
+    overlay: new THREE.CylinderGeometry(HEX * 0.985, HEX * 0.985, 0.8, 6),
     fog: new THREE.CylinderGeometry(HEX * 0.985, HEX * 0.985, 34, 6),
     cloud: new THREE.SphereGeometry(HEX * 0.78, 6, 4),
     peak: new THREE.ConeGeometry(HEX * 0.62, 11, 6),
