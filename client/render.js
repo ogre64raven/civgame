@@ -42,6 +42,7 @@ const Render = (() => {
     hex1: new THREE.CylinderGeometry(HEX * 0.94, HEX * 0.94, 1, 6),
     overlay: new THREE.CylinderGeometry(HEX * 0.9, HEX * 0.9, 0.8, 6),
     fog: new THREE.CylinderGeometry(HEX * 0.985, HEX * 0.985, 26, 6),
+    cloud: new THREE.SphereGeometry(HEX * 0.78, 6, 4),
     peak: new THREE.ConeGeometry(HEX * 0.62, 11, 6),
     tree: new THREE.ConeGeometry(HEX * 0.3, 7, 6),
     ring: new THREE.RingGeometry(HEX * 0.8, HEX * 0.97, 6),
@@ -248,7 +249,7 @@ const Render = (() => {
   // ── 씬 계층
   let inited = false;
   let terrainGroup = null;
-  let fogMesh = null, territoryMesh = null;
+  let fogMesh = null, cloudMesh = null, territoryMesh = null;
   const dynamicGroup = new THREE.Group();  // 유닛·건물·경로·라벨 (재구축 대상)
   const fxGroup = new THREE.Group();       // 전투 연출
   scene.add(dynamicGroup, fxGroup);
@@ -309,9 +310,13 @@ const Render = (() => {
     territoryMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(landCount * 3), 3);
     scene.add(territoryMesh);
 
-    // 안개
-    fogMesh = new THREE.InstancedMesh(GEO.fog, new THREE.MeshBasicMaterial({ color: FOG_COLOR }), map.w * map.h);
+    // 안개: 하단 차단층(산보다 높게) + 상단 뭉게구름층
+    fogMesh = new THREE.InstancedMesh(GEO.fog,
+      new THREE.MeshLambertMaterial({ color: 0x323f55 }), map.w * map.h);
     scene.add(fogMesh);
+    cloudMesh = new THREE.InstancedMesh(GEO.cloud,
+      new THREE.MeshLambertMaterial({ color: 0xb9c3d4, transparent: true, opacity: 0.85 }), map.w * map.h);
+    scene.add(cloudMesh);
 
     // 선택 링
     selRing = new THREE.Mesh(GEO.ring, new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, transparent: true, opacity: 0.9 }));
@@ -357,15 +362,27 @@ const Render = (() => {
         for (let x = 0; x < map.w; x++) {
           if (vision.has(x + ',' + y)) continue;
           const [wx, wz] = worldPos(x, y);
-          dummy.position.set(wx, -12.5, wz); // 윗면이 y=0.5
+          // 차단층: 윗면 y=20 (산봉우리 18보다 높게)
+          dummy.position.set(wx, 7, wz);
           dummy.scale.set(1, 1, 1);
           dummy.rotation.set(0, 0, 0);
           dummy.updateMatrix();
-          fogMesh.setMatrixAt(fi++, dummy.matrix);
+          fogMesh.setMatrixAt(fi, dummy.matrix);
+          // 구름층: 타일별 결정적 지터로 뭉게뭉게
+          const jr = ((x * 73856093) ^ (y * 19349663)) >>> 0;
+          const r1 = (jr % 100) / 100, r2 = ((jr >> 7) % 100) / 100;
+          dummy.position.set(wx + (r1 - 0.5) * 7, 21.5 + r2 * 2.5, wz + (r2 - 0.5) * 7);
+          dummy.scale.set(1.25 + r1 * 0.8, 0.5 + r2 * 0.35, 1.25 + r2 * 0.8);
+          dummy.rotation.set(0, r1 * 3.1, 0);
+          dummy.updateMatrix();
+          cloudMesh.setMatrixAt(fi, dummy.matrix);
+          fi++;
         }
     }
     fogMesh.count = fi;
     fogMesh.instanceMatrix.needsUpdate = true;
+    cloudMesh.count = fi;
+    cloudMesh.instanceMatrix.needsUpdate = true;
 
     // 영토 오버레이
     let ti = 0;
@@ -653,6 +670,7 @@ const Render = (() => {
     } else selRing.visible = false;
 
     animateFx(state, visionCache);
+    if (cloudMesh) cloudMesh.position.y = Math.sin(now / 1600) * 1.4;
     updateCamera();
     renderer.render(scene, camera);
   }
