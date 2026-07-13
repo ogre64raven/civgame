@@ -15,6 +15,51 @@ const Render = (() => {
   const HEX = 14;
   const SQRT3 = Math.sqrt(3);
 
+  // ── 2.5D 입체 렌더링: 타일을 육각 기둥으로 돌출
+  const ISO = 0.62;                                       // 시점 기울기 (y 압축)
+  const ELEV_K = { '~': 0, g: 0.28, p: 0.28, f: 0.34, m: 0.9 }; // 지형 높이 (HEX 배수)
+  const elevOf = (t) => HEX * (ELEV_K[t] || 0);
+  function shade(hex, f) {
+    const n = parseInt(hex.slice(1), 16);
+    return `rgb(${Math.round(((n >> 16) & 255) * f)},${Math.round(((n >> 8) & 255) * f)},${Math.round((n & 255) * f)})`;
+  }
+  // 옆면(스커트): 아랫변 꼭짓점 3개를 바닥까지 내림
+  function drawSkirt(cx, groundY, topY, r, color) {
+    const pts = [150, 90, 30].map(deg => {
+      const a = Math.PI / 180 * deg;
+      return [cx + r * Math.cos(a), r * Math.sin(a) * ISO];
+    });
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], topY + pts[0][1]);
+    ctx.lineTo(pts[1][0], topY + pts[1][1]);
+    ctx.lineTo(pts[2][0], topY + pts[2][1]);
+    ctx.lineTo(pts[2][0], groundY + pts[2][1]);
+    ctx.lineTo(pts[1][0], groundY + pts[1][1]);
+    ctx.lineTo(pts[0][0], groundY + pts[0][1]);
+    ctx.closePath();
+    ctx.fillStyle = shade(color, 0.55);
+    ctx.fill();
+  }
+  // 산봉우리 (설산 투톤)
+  function drawPeak(cx, ey) {
+    const r = HEX * 0.55;
+    const top = ey - HEX * 0.55;
+    ctx.beginPath();
+    ctx.moveTo(cx - r, ey + HEX * 0.15 * ISO);
+    ctx.lineTo(cx, top);
+    ctx.lineTo(cx + r, ey + HEX * 0.15 * ISO);
+    ctx.closePath();
+    ctx.fillStyle = '#6f767e';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(cx - r * 0.35, top + HEX * 0.19);
+    ctx.lineTo(cx, top);
+    ctx.lineTo(cx + r * 0.35, top + HEX * 0.19);
+    ctx.closePath();
+    ctx.fillStyle = '#e8edf2';
+    ctx.fill();
+  }
+
   function resize() {
     canvas.width = window.innerWidth * devicePixelRatio;
     canvas.height = window.innerHeight * devicePixelRatio;
@@ -26,13 +71,13 @@ const Render = (() => {
 
   function hexCenter(x, y) {
     const s = HEX;
-    return [s * SQRT3 * (x + 0.5 * (y & 1)) + s, s * 1.5 * y + s];
+    return [s * SQRT3 * (x + 0.5 * (y & 1)) + s, s * 1.5 * y * ISO + s];
   }
 
   function hexAt(screenX, screenY, map) {
     const wx = (screenX + cam.x) / cam.zoom;
     const wy = (screenY + cam.y) / cam.zoom;
-    const yGuess = Math.round((wy - HEX) / (1.5 * HEX));
+    const yGuess = Math.round((wy - HEX) / (1.5 * HEX * ISO));
     let best = null, bestD = Infinity;
     for (let y = yGuess - 1; y <= yGuess + 1; y++) {
       if (y < 0 || y >= map.h) continue;
@@ -40,7 +85,7 @@ const Render = (() => {
       for (let x = xGuess - 1; x <= xGuess + 1; x++) {
         if (x < 0 || x >= map.w) continue;
         const [cx, cy] = hexCenter(x, y);
-        const d = (cx - wx) ** 2 + (cy - wy) ** 2;
+        const d = (cx - wx) ** 2 + ((cy - wy) / ISO) ** 2;
         if (d < bestD) { bestD = d; best = [x, y]; }
       }
     }
@@ -51,7 +96,7 @@ const Render = (() => {
     ctx.beginPath();
     for (let i = 0; i < 6; i++) {
       const a = Math.PI / 180 * (60 * i - 30);
-      const px = cx + r * Math.cos(a), py = cy + r * Math.sin(a);
+      const px = cx + r * Math.cos(a), py = cy + r * Math.sin(a) * ISO;
       i ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
     }
     ctx.closePath();
@@ -370,7 +415,8 @@ const Render = (() => {
   function drawBattleFx(fx, nowMs, isVis, state) {
     const [hx, hy] = fx.hex;
     if (!isVis(hx, hy)) return;
-    const [cx, cy] = hexCenter(hx, hy);
+    const [cx, cyRaw] = hexCenter(hx, hy);
+    const cy = cyRaw - ((state.map && state.map.rows[hy]) ? elevOf(state.map.rows[hy][hx]) : 0);
     const t = (nowMs - fx.start) / 1000;
     const s = HEX * 0.5;
     const info = (id) => {
@@ -482,7 +528,7 @@ const Render = (() => {
     // 타일 + 영토 + 자원 아이콘
     for (let y = 0; y < map.h; y++) {
       const [, cy] = hexCenter(0, y);
-      if (cy < viewT - HEX * 2 || cy > viewB + HEX * 2) continue;
+      if (cy < viewT - HEX * 3 || cy > viewB + HEX * 3) continue;
       const row = map.rows[y];
       for (let x = 0; x < map.w; x++) {
         const [cx] = hexCenter(x, y);
@@ -492,30 +538,35 @@ const Render = (() => {
           drawHex(cx, cy, HEX - 0.3, '#0c1322', 'rgba(148,163,184,.05)');
           continue;
         }
-        drawHex(cx, cy, HEX - 0.5, TERRAIN_COLOR[t], t === '~' ? null : 'rgba(0,0,0,.25)');
+        const elev = elevOf(t);
+        const ey = cy - elev;
+        if (elev > 0) drawSkirt(cx, cy, ey, HEX - 0.5, TERRAIN_COLOR[t]);
+        drawHex(cx, ey, HEX - 0.5, TERRAIN_COLOR[t], t === '~' ? null : 'rgba(0,0,0,.28)');
         if (t === '~') continue;
+        if (t === 'm') drawPeak(cx, ey);
 
-        // 영토 색칠
+        // 영토 색칠 (윗면)
         const owner = state.territory.get(x + ',' + y);
         if (owner != null) {
           const civ = state.civs.get(owner);
           if (civ) {
-            ctx.globalAlpha = 0.45;
-            drawHex(cx, cy, HEX - 0.5, civ.color);
+            ctx.globalAlpha = 0.4;
+            drawHex(cx, ey, HEX - 0.5, civ.color);
             ctx.globalAlpha = 1;
-            drawHex(cx, cy, HEX - 1.2, null, civ.color, 1.2);
+            drawHex(cx, ey, HEX - 1.2, null, civ.color, 1.2);
           }
         }
-        // 자원 아이콘 (확대 시)
-        if (z > 1.1) drawResourceIcon(t, cx, cy);
+        // 자원 아이콘 (확대 시, 산은 봉우리가 대신함)
+        if (z > 1.1 && t !== 'm') drawResourceIcon(t, cx, ey);
       }
     }
 
     // 수도 마커 (별 표시 링)
     for (const civ of state.civs.values()) {
       if (!isVis(civ.capital[0], civ.capital[1])) continue;
-      const [cx, cy] = hexCenter(civ.capital[0], civ.capital[1]);
-      if (!inView(cx, cy)) continue;
+      const [cx, cyRaw] = hexCenter(civ.capital[0], civ.capital[1]);
+      const cy = cyRaw - elevOf(map.rows[civ.capital[1]][civ.capital[0]]);
+      if (!inView(cx, cyRaw)) continue;
       drawHex(cx, cy, HEX + 1, null, civ.color, 2.5);
       drawHex(cx, cy, HEX + 3, null, 'rgba(255,255,255,.35)', 1);
       if (civ.alive) {
@@ -539,11 +590,15 @@ const Render = (() => {
         const u = state.units.get(unitId);
         if (!u || !path.length) continue;
         const me = state.civs.get(state.you);
+        const topOf = (tx2, ty2) => {
+          const [ax, ay] = hexCenter(tx2, ty2);
+          return [ax, ay - elevOf(map.rows[ty2][tx2])];
+        };
         ctx.beginPath();
-        let [px, py] = hexCenter(u.x, u.y);
+        let [px, py] = topOf(u.x, u.y);
         ctx.moveTo(px, py);
         for (const [hx, hy] of path) {
-          [px, py] = hexCenter(hx, hy);
+          [px, py] = topOf(hx, hy);
           ctx.lineTo(px, py);
         }
         ctx.strokeStyle = me.color;
@@ -552,7 +607,7 @@ const Render = (() => {
         ctx.stroke();
         ctx.setLineDash([]);
         const [tx, ty] = path[path.length - 1];
-        const [tcx, tcy] = hexCenter(tx, ty);
+        const [tcx, tcy] = topOf(tx, ty);
         drawHex(tcx, tcy, HEX * 0.55, null, me.color, 2);
       }
     }
@@ -564,12 +619,16 @@ const Render = (() => {
       if (!byHex.has(k)) byHex.set(k, []);
       byHex.get(k).push(u);
     }
-    for (const [k, units] of byHex) {
+    const sortedHexKeys = [...byHex.keys()].sort(
+      (a, b) => Number(a.split(',')[1]) - Number(b.split(',')[1]));
+    for (const k of sortedHexKeys) {
+      const units = byHex.get(k);
       if (fxHexes.has(k)) continue; // 전투 연출 중
       const [x, y] = k.split(',').map(Number);
       if (!isVis(x, y)) continue;
-      const [cx, cy] = hexCenter(x, y);
-      if (!inView(cx, cy)) continue;
+      const [cx, cyRaw] = hexCenter(x, y);
+      const cy = cyRaw - elevOf(map.rows[y][x]); // 지형 위에 서기
+      if (!inView(cx, cyRaw)) continue;
       const byCiv = new Map();
       for (const u of units) {
         if (!byCiv.has(u.civ)) byCiv.set(u.civ, []);
@@ -582,6 +641,12 @@ const Render = (() => {
         if (!civ) { gi++; continue; }
         const gx = cx + (gi - (n - 1) / 2) * HEX * 0.6;
         const allStunned = group.every(u => u.stunned > 0);
+        // 그림자
+        ctx.globalAlpha = (allStunned ? 0.5 : 1) * 0.3;
+        ctx.beginPath();
+        ctx.ellipse(gx, cy + HEX * 0.48, HEX * 0.34, HEX * 0.12, 0, 0, Math.PI * 2);
+        ctx.fillStyle = '#000';
+        ctx.fill();
         ctx.globalAlpha = allStunned ? 0.5 : 1;
         const mil = (civ.tech && civ.tech.military) || 0;
         drawUnitFigure(gx, cy, HEX * 0.5, civ.color, mil);
@@ -617,7 +682,8 @@ const Render = (() => {
     if (state.selected != null) {
       const u = state.units.get(state.selected);
       if (u) {
-        const [cx, cy] = hexCenter(u.x, u.y);
+        const [cx, cyRaw] = hexCenter(u.x, u.y);
+        const cy = cyRaw - elevOf(map.rows[u.y] ? map.rows[u.y][u.x] : '~');
         ctx.beginPath();
         ctx.ellipse(cx, cy + HEX * 0.02, HEX * 0.68, HEX * 0.8, 0, 0, Math.PI * 2);
         ctx.strokeStyle = '#ffffff';
