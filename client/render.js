@@ -416,20 +416,37 @@ const Render = (() => {
       }
     }
 
-    // 내 유닛 경로 (점선)
+    // 내 유닛 경로 (두꺼운 튜브 + 관절 + 목적지 마커)
     if (state.you != null) {
+      const UP = new THREE.Vector3(0, 1, 0);
       for (const [unitId, path] of state.myOrders) {
         const u = state.units.get(unitId);
         if (!u || !path.length) continue;
         const me = state.civs.get(state.you);
         const pts = [[u.x, u.y], ...path].map(([hx, hy]) => {
           const [wx, wz] = worldPos(hx, hy);
-          return new THREE.Vector3(wx, topY(map.rows[hy][hx]) + 1.5, wz);
+          return new THREE.Vector3(wx, topY(map.rows[hy][hx]) + 2.4, wz);
         });
-        const geo = new THREE.BufferGeometry().setFromPoints(pts);
-        const line = new THREE.Line(geo, new THREE.LineDashedMaterial({ color: new THREE.Color(me.color), dashSize: 4, gapSize: 3 }));
-        line.computeLineDistances();
-        dynamicGroup.add(line);
+        const lineMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(me.color) });
+        for (let i = 0; i < pts.length - 1; i++) {
+          const a = pts[i], b = pts[i + 1];
+          const dir = new THREE.Vector3().subVectors(b, a);
+          const len = dir.length();
+          if (len < 0.01) continue;
+          const seg = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.5, len, 6), lineMat);
+          seg.position.copy(a).add(b).multiplyScalar(0.5);
+          seg.quaternion.setFromUnitVectors(UP, dir.normalize());
+          dynamicGroup.add(seg);
+          const joint = new THREE.Mesh(new THREE.SphereGeometry(2, 8, 6), lineMat);
+          joint.position.copy(b);
+          dynamicGroup.add(joint);
+        }
+        // 목적지: 떠 있는 역삼각 마커
+        const dest = pts[pts.length - 1];
+        const cone = new THREE.Mesh(new THREE.ConeGeometry(3.6, 7, 8), lineMat);
+        cone.rotation.x = Math.PI;
+        cone.position.set(dest.x, dest.y + 12, dest.z);
+        dynamicGroup.add(cone);
       }
     }
 

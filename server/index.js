@@ -40,6 +40,7 @@ function makeGame() {
       type: 'exec', turn: g.turn,
       moves: result.moves, battles: result.battles, stuns: result.stuns,
       captures: result.captures, capitalHits: result.capitalHits, conquests: result.conquests,
+      births: result.births,
       delegations: result.delegations, techUpdates: result.techUpdates,
       allyLeft: result.allyLeft, absorptions: result.absorptions, scores: result.scores,
     });
@@ -50,6 +51,8 @@ function makeGame() {
       sendTo(c, { type: 'resources', resources: civ.resources, gained: result.gains[c.civId] || null });
       const rf = result.researchFails.find(f => f.civId === c.civId);
       if (rf) sendTo(c, { type: 'researchFailed', reason: rf.reason });
+      const sf = result.spawnFails.find(f => f.civId === c.civId);
+      if (sf) sendTo(c, { type: 'spawnFailed', reason: sf.reason });
     }
     if (result.gameover) broadcast({ type: 'gameover', ...result.gameover });
   };
@@ -208,7 +211,7 @@ wss.on('connection', (ws) => {
       }
       case 'order.move': {
         if (ws.civId == null) return;
-        const r = game.moveOrder(ws.civId, msg.unitId, msg.target);
+        const r = game.moveOrder(ws.civId, msg.unitId, msg.target, !!msg.append);
         if (r.ok) sendTo(ws, { type: 'orderAck', unitId: msg.unitId, path: r.path });
         else sendTo(ws, { type: 'orderRejected', unitId: msg.unitId, reason: r.reason });
         break;
@@ -217,6 +220,13 @@ wss.on('connection', (ws) => {
         if (ws.civId == null) return;
         game.cancelOrder(ws.civId, msg.unitId);
         sendTo(ws, { type: 'orderAck', unitId: msg.unitId, path: [] });
+        break;
+      }
+      case 'order.spawn': {
+        if (ws.civId == null) return;
+        const r = game.spawnOrder(ws.civId);
+        if (r.ok) sendTo(ws, { type: 'spawnAck', cost: r.cost });
+        else sendTo(ws, { type: 'spawnRejected', reason: r.reason });
         break;
       }
       case 'order.research': {

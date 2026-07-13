@@ -27,15 +27,17 @@
     phase: '지금은 명령할 수 없습니다 (회의 턴에만 가능)', unit: '내 유닛이 아닙니다',
     target: '이동할 수 없는 지형입니다', path: '길이 없습니다 (바다로 막힘)',
     cost: '자원이 부족합니다', dead: '점령된 문명은 사용할 수 없습니다',
+    cap: '유닛 상한 도달 — 인구 기술을 연구하세요',
     max: '이미 최고 레벨입니다', branch: '알 수 없는 연구입니다',
     already: '이미 동맹입니다', noproposal: '해당 제안이 없습니다',
     full: '동맹은 최대 3개국까지입니다', noconsent: '유효하지 않은 동의 요청입니다',
     notally: '동맹이 아닙니다', civ: '대상이 올바르지 않습니다',
   };
-  const TECH_KO = { military: '군사', defense: '방어', gather: '채집', move: '이동' };
+  const TECH_KO = { military: '군사', defense: '인구', gather: '채집', move: '이동' };
   const TECH_RES_KO = { military: '철', defense: '고기', gather: '목재', move: '곡식' };
-  const TECH_DESC = { military: '전투력 +1', defense: '내 영토 전투 +1', gather: '채취 +20%', move: '이동력 +1/3Lv (기본 3 · 평지1/산2/바다3)' };
+  const TECH_DESC = { military: '전투력 +1', defense: '유닛 상한 +1 · 내 영토 전투 +1', gather: '채취 +20%', move: '이동력 +1/3Lv (기본 3 · 평지1/산2/바다3)' };
   let ws;
+  let orderChain = null; // 같은 선택 세션에서 연속 클릭 → 웨이포인트 연장
 
   const isMine = (u) => u.civ === state.you || u.controller === state.you;
   const civName = (id) => { const c = state.civs.get(id); return c ? c.name : '?'; };
@@ -181,6 +183,7 @@
         state.phase = msg.phase; state.turn = msg.turn; state.endsAt = msg.endsAt;
         if (state.gameState === 'LOBBY') setGameState('RUNNING');
         if (msg.phase === 'MEETING') state.queuedResearch = null;
+        orderChain = null;
         if (msg.phase === 'MEETING') showPhaseBanner(`턴 ${msg.turn} — 회의 턴`, 'meeting');
         else if (msg.phase === 'EXECUTION') showPhaseBanner('실행 턴', 'execution');
         updateHud();
@@ -210,6 +213,10 @@
         for (const s of msg.stuns || []) {
           const u = state.units.get(s.unitId);
           if (u) u.stunned = s.turns;
+        }
+        for (const nu of msg.births || []) {
+          state.units.set(nu.id, nu);
+          if (nu.civ === state.you) toast('수도에서 새 유닛이 태어났습니다');
         }
         for (const d of msg.delegations || []) {
           const u = state.units.get(d.unitId);
@@ -275,6 +282,15 @@
       }
       case 'orderRejected': {
         toast(REASON_KO[msg.reason] || '명령이 거부되었습니다');
+        break;
+      }
+      case 'spawnAck': {
+        toast(`생산 예약 — 실행 턴에 수도에서 유닛 생성 (고기·곡식 ${msg.cost}씩)`);
+        break;
+      }
+      case 'spawnRejected':
+      case 'spawnFailed': {
+        toast('생산 실패: ' + (REASON_KO[msg.reason] || msg.reason));
         break;
       }
       case 'researchAck': {
@@ -419,6 +435,7 @@
       const idx = myUnitsHere.findIndex(u => u.id === state.selected);
       const next = myUnitsHere[(idx + 1) % myUnitsHere.length];
       state.selected = next.id;
+      orderChain = null; // 새 선택 → 다음 클릭은 새 경로
       const path = state.myOrders.get(next.id);
       toast(`유닛 #${next.id} 선택` + (path ? ` (이동 중: ${path.length}칸 남음)` : ''));
       return;
@@ -426,15 +443,19 @@
 
     if (state.selected != null) {
       if (state.phase !== 'MEETING') { toast('회의 턴에만 명령할 수 있습니다'); return; }
-      send({ type: 'order.move', unitId: state.selected, target: [hx, hy] });
+      const append = orderChain === state.selected;
+      send({ type: 'order.move', unitId: state.selected, target: [hx, hy], append });
+      if (append) toast('웨이포인트 추가');
+      orderChain = state.selected;
     }
   });
 
   window.addEventListener('keydown', (e) => {
     if (typing()) return;
-    if (e.key === 'Escape') state.selected = null;
+    if (e.key === 'Escape') { state.selected = null; orderChain = null; }
     if (e.key === 'x' && state.selected != null) {
       send({ type: 'order.stop', unitId: state.selected });
+      orderChain = null;
       toast('이동 취소');
     }
     if (e.key === 'Enter' && state.map && !state.spectator) {

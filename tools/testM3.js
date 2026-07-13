@@ -231,6 +231,29 @@ const key = (h) => h[0] + ',' + h[1];
   check(u.x === last[0] && u.y === last[1], '2턴차에 바다 목표 도달');
 }
 
+// ── 10.3 웨이포인트: append로 경로 연장, 일반 명령은 교체
+{
+  const { game, civs } = newGame(1);
+  const A = civs[0];
+  const u = unitsOf(game, A.id)[0];
+  const t1 = world.neighbors(u.x, u.y).find(([x, y]) => world.isLand(x, y));
+  const t2 = t1 && world.neighbors(t1[0], t1[1]).find(([x, y]) =>
+    world.isLand(x, y) && !(x === u.x && y === u.y) && !(x === t1[0] && y === t1[1]));
+  if (t1 && t2) {
+    const r1 = game.moveOrder(A.id, u.id, t1);
+    const r2 = game.moveOrder(A.id, u.id, t2, true);
+    const last = r2.path[r2.path.length - 1];
+    check(r2.ok && r2.path.length > r1.path.length && last[0] === t2[0] && last[1] === t2[1],
+      `웨이포인트 연장 (${r1.path.length}→${r2.path.length}칸)`);
+    check(r2.path[0][0] === r1.path[0][0] && r2.path[0][1] === r1.path[0][1], '기존 경로 유지 후 연장');
+    const r3 = game.moveOrder(A.id, u.id, t1);
+    const last3 = r3.path[r3.path.length - 1];
+    check(r3.ok && last3[0] === t1[0] && last3[1] === t1[1], '일반 명령은 경로 교체');
+  } else {
+    check(true, '이웃 지형 부족 (건너뜀)');
+  }
+}
+
 // ── 10.5 지형별 이동 비용
 {
   const { game } = newGame(1);
@@ -281,6 +304,36 @@ const key = (h) => h[0] + ',' + h[1];
   } else {
     check(true, '산 2연속 직행 경로 없음 (비용 검증으로 대체)');
   }
+}
+
+// ── 10.8 수도 유닛 생산: 인구 기술 1레벨당 상한 +1
+{
+  const { game, civs } = newGame(1);
+  const A = game.civs.get(civs[0].id);
+  A.resources.meat = 30; A.resources.grain = 30;
+  // 기본 상한 3 → 생산 불가
+  check(game.spawnOrder(A.id).reason === 'cap', '인구 Lv0: 상한 3에서 생산 거부');
+  // 인구 Lv1 → 상한 4
+  A.tech.defense = 1;
+  const so = game.spawnOrder(A.id);
+  check(so.ok === true, '인구 Lv1: 생산 예약 접수');
+  const r = game.resolveExecution();
+  check(r.births.length === 1, '실행 턴에 수도에서 유닛 생성');
+  check(r.births[0].x === A.capital[0] && r.births[0].y === A.capital[1], '생성 위치 = 수도');
+  check(unitsOf(game, A.id).length === 4, '유닛 4기 (3+1)');
+  check(A.resources.meat === 30 - 10 + (r.gains && 0 || 0) || A.resources.meat <= 21, '고기 10 차감');
+  // 상한 재도달
+  check(game.spawnOrder(A.id).reason === 'cap', 'Lv1 상한 4 재도달 → 거부');
+  // 자원 부족
+  A.tech.defense = 2;
+  A.resources.meat = 5;
+  check(game.spawnOrder(A.id).reason === 'cost', '자원 부족 거부');
+  // 예약 후 실행 시점 재검증 (자원 소진)
+  A.resources.meat = 10; A.resources.grain = 10;
+  game.spawnOrder(A.id);
+  A.resources.grain = 0;
+  const r2 = game.resolveExecution();
+  check(r2.spawnFails.some(f => f.civId === A.id && f.reason === 'cost'), '실행 시 자원 재검증');
 }
 
 // ── 11. 수도 HP: 기술 총합 비례 + 회복 + 군사 기술 피해

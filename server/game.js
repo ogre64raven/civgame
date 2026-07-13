@@ -4,7 +4,8 @@ const crypto = require('crypto');
 const countries = require('../data/countries.json');
 
 const MAX_PLAYERS = 30;
-const START_UNITS = 3;                  // 문명당 유닛 수 (고정, 생성/소멸 없음)
+const START_UNITS = 3;                  // 시작 유닛 수
+const SPAWN_COST = 10;                  // 유닛 생산 비용 (고기·곡식 각각)
 const TECH_MAX = 5;
 const TECH_RES = { military: 'iron', defense: 'meat', gather: 'wood', move: 'grain' };
 const techCost = (targetLevel) => 20 * targetLevel;
@@ -51,6 +52,7 @@ class Game {
     this.units = new Map();             // unitId -> { id, civ, x, y, stunned, controller? }
     this.orders = new Map();
     this.researchOrders = new Map();
+    this.spawnOrders = new Set();       // 수도 유닛 생산 예약 (civId)
     this.territory = new Map();         // 'x,y' -> civId
     this.territoryByCiv = new Map();    // civId -> Set('x,y')
     this.allies = new Map();
@@ -105,6 +107,7 @@ class Game {
     this.dissolveDiplomacyFor(civId);
     for (const v of this.civs.values()) if (v.conqueredBy === civId) v.conqueredBy = null;
     this.researchOrders.delete(civId);
+    this.spawnOrders.delete(civId);
     this.tokens.delete(civ.token);
     this.civs.delete(civId);
     return true;
@@ -152,6 +155,10 @@ class Game {
     const t = civ.tech;
     return (t.military + t.defense + t.gather + t.move) + this.tileCountOf(civ.id);
   }
+  // 유닛 상한 = 시작 3기 + 인구(defense) 기술 레벨
+  maxUnits(civ) { return START_UNITS + ((civ.tech && civ.tech.defense) || 0); }
+  unitCountOf(civId) { let n = 0; for (const u of this.units.values()) if (u.civ === civId) n++; return n; }
+
   // 수도 최대 HP = 5 + 4계통 기술 총합
   maxCapitalHp(civ) {
     const t = civ.tech;
@@ -279,6 +286,23 @@ class Game {
     }
     this.researchOrders.clear();
 
+    // ⑤.5 수도 유닛 생산
+    const births = [], spawnFails = [];
+    for (const civId of this.spawnOrders) {
+      const civ = this.civs.get(civId);
+      const fail = (reason) => spawnFails.push({ civId, reason });
+      if (!civ || !civ.alive) { fail('dead'); continue; }
+      if (this.unitCountOf(civId) >= this.maxUnits(civ)) { fail('cap'); continue; }
+      if (civ.resources.meat < SPAWN_COST || civ.resources.grain < SPAWN_COST) { fail('cost'); continue; }
+      civ.resources.meat -= SPAWN_COST;
+      civ.resources.grain -= SPAWN_COST;
+      const uid = this.nextUnitId++;
+      const nu = { id: uid, civ: civId, x: civ.capital[0], y: civ.capital[1], stunned: 0 };
+      this.units.set(uid, nu);
+      births.push(nu);
+    }
+    this.spawnOrders.clear();
+
     // ⑥ 외교: 동맹 탈퇴 발효 → 흡수 판정
     const allyLeft = [];
     for (const [from, to] of this.leaveOrders) {
@@ -333,7 +357,7 @@ class Game {
 
     return {
       moves, battles, stuns, captures, capitalHits, conquests, delegations: this._delegations,
-      gains, techUpdates, researchFails, allyLeft, absorptions, gameover,
+      gains, births, spawnFails, techUpdates, researchFails, allyLeft, absorptions, gameover,
       scores: this.scoresPublic(),
     };
   }
@@ -504,6 +528,7 @@ class Game {
     civ.alive = false;
     civ.conqueredBy = byId;
     this.researchOrders.delete(civ.id);
+    this.spawnOrders.delete(civ.id);
     this.dissolveDiplomacyFor(civ.id);
     for (const v of this.civs.values()) {
       if (v.id !== civ.id && v.conqueredBy === civ.id) {
@@ -592,24 +617,45 @@ class Game {
   }
 
   // ── 명령 (진행 중 + 회의 턴에만)
-  moveOrder(civId, unitId, target) {
+  moveOrder(civId, unitId, target, append) {
     if (this.state !== 'RUNNING' || this.phase !== 'MEETING') return { ok: false, reason: 'phase' };
     const u = this.units.get(unitId);
     if (!u || this.controllerOf(u) !== civId) return { ok: false, reason: 'unit' };
     if (!Array.isArray(target) || target.length !== 2) return { ok: false, reason: 'target' };
     const [tx, ty] = [this.world.wrapX(Math.trunc(target[0])), Math.trunc(target[1])];
     if (ty < 0 || ty >= this.world.h) return { ok: false, reason: 'target' };
-    const path = this.findPath(u.x, u.y, tx, ty);
+    // 웨이포인트: append면 기존 경로의 끝에서 이어붙임
+    let sx = u.x, sy = u.y, base = [];
+    if (append) {
+      const cur = this.orders.get(unitId);
+      if (cur && cur.idx < cur.path.length) {
+        base = cur.path.slice(cur.idx);
+        [sx, sy] = base[base.length - 1];
+      }
+    }
+    const path = this.findPath(sx, sy, tx, ty);
     if (!path) return { ok: false, reason: 'path' };
-    if (path.length === 0) { this.orders.delete(unitId); return { ok: true, path: [] }; }
-    this.orders.set(unitId, { path, idx: 0 });
-    return { ok: true, path };
+    const full = base.concat(path);
+    if (full.length === 0) { this.orders.delete(unitId); return { ok: true, path: [] }; }
+    this.orders.set(unitId, { path: full, idx: 0 });
+    return { ok: true, path: full };
   }
 
   cancelOrder(civId, unitId) {
     const u = this.units.get(unitId);
     if (!u || this.controllerOf(u) !== civId) return false;
     return this.orders.delete(unitId);
+  }
+
+  // 수도 유닛 생산 예약 (회의 턴) — 실행 턴에 수도에서 생성
+  spawnOrder(civId) {
+    if (this.state !== 'RUNNING' || this.phase !== 'MEETING') return { ok: false, reason: 'phase' };
+    const civ = this.civs.get(civId);
+    if (!civ || !civ.alive) return { ok: false, reason: 'dead' };
+    if (this.unitCountOf(civId) >= this.maxUnits(civ)) return { ok: false, reason: 'cap' };
+    if (civ.resources.meat < SPAWN_COST || civ.resources.grain < SPAWN_COST) return { ok: false, reason: 'cost' };
+    this.spawnOrders.add(civId);
+    return { ok: true, cost: SPAWN_COST };
   }
 
   researchOrder(civId, branch) {

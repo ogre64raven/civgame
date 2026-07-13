@@ -11,6 +11,10 @@ function runBots(game) {
     if (!civ.isBot || !civ.alive) continue;
     try {
       botResearch(game, civ);
+      if (game.unitCountOf(civ.id) < game.maxUnits(civ) &&
+          civ.resources.meat >= 10 && civ.resources.grain >= 10) {
+        game.spawnOrder(civ.id);
+      }
       botMoves(game, civ);
     } catch (e) {
       console.error('봇 오류:', civ.name, e.message);
