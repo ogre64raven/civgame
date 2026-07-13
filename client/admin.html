@@ -55,6 +55,7 @@
     </div>
     <div class="row">
       <button id="startBtn" class="green">게임 시작</button>
+      <button id="botBtn">봇 추가</button>
       <button id="resetBtn" class="red">게임 리셋 (로비로)</button>
     </div>
     <div id="actionMsg" style="font-size:12.5px;color:#fbbf24;min-height:18px"></div>
@@ -135,15 +136,16 @@ async function poll() {
     const tr = document.createElement('tr');
     if (!p.alive) tr.className = 'dead';
     const status = !p.alive ? '예속' : p.connected ? '접속 중' : '오프라인';
-    tr.innerHTML = `<td>${p.name} (${p.code})</td><td>${p.player}</td><td>${p.units}</td><td>${p.score}</td>` +
+    const botTag = p.isBot ? ' <span style="color:#a78bfa">[봇]</span>' : '';
+    tr.innerHTML = `<td>${p.name} (${p.code})${botTag}</td><td>${p.player}</td><td>${p.units}</td><td>${p.score}</td>` +
       `<td class="${p.connected ? '' : 'off'}">${status}</td>`;
     const td = document.createElement('td');
     const btn = document.createElement('button');
     btn.className = 'small red';
-    btn.textContent = '강퇴';
+    btn.textContent = p.isBot ? '제거' : '강퇴';
     btn.onclick = async () => {
-      if (!confirm(p.name + ' (' + p.player + ') 강퇴할까요?')) return;
-      await api('POST', '/api/admin/kick', { civId: p.id });
+      if (!confirm(p.name + (p.isBot ? ' 봇을 제거할까요?' : ' (' + p.player + ') 강퇴할까요?'))) return;
+      await api('POST', p.isBot ? '/api/admin/removeBot' : '/api/admin/kick', { civId: p.id });
       poll();
     };
     td.append(btn);
@@ -158,6 +160,11 @@ $('pass').addEventListener('keydown', (e) => { if (e.key === 'Enter') login(); }
 $('startBtn').onclick = async () => {
   const r = await api('POST', '/api/admin/start');
   $('actionMsg').textContent = r.ok ? '게임을 시작했습니다' : '시작 실패: ' + (r.reason || '');
+  poll();
+};
+$('botBtn').onclick = async () => {
+  const r = await api('POST', '/api/admin/addBot');
+  $('actionMsg').textContent = r.ok ? '봇 추가: ' + (r.name || '') : '봇 추가 실패 (' + (r.reason || r.error || '') + ')';
   poll();
 };
 $('resetBtn').onclick = async () => {

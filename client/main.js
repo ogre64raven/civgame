@@ -492,7 +492,8 @@
       const nm = document.createElement('span');
       nm.className = 'nm';
       const vassal = c.alive ? '' : ' [예속]';
-      nm.textContent = `${c.name}${vassal} · ${c.player}${c.id === state.you ? ' (나)' : ''}`;
+      const botTag = c.isBot ? ' [봇]' : '';
+      nm.textContent = `${c.name}${botTag}${vassal} · ${c.player}${c.id === state.you ? ' (나)' : ''}`;
       row.append(dot, nm);
 
       if (running && state.you != null && c.id !== state.you && !state.spectator && meAlive && c.alive && !state.ended) {

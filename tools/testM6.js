@@ -28,6 +28,25 @@ const check = (cond, label) => {
   check(bad === 0, `배정 풀 전체가 ${MIN_LANDMASS}헥스 이상 대륙 (위반 ${bad})`);
 }
 
+// ── 0.5 봇 AI (오프라인)
+{
+  const { runBots } = require('../server/bots');
+  const world2 = new World();
+  const g = new Game(world2, () => {});
+  g.join(undefined, '사람');
+  const rb = g.addBot();
+  check(rb.ok && g.civs.get(rb.civ.id).isBot === true, '봇 생성 (isBot 플래그)');
+  g.startGame();
+  clearTimeout(g.timer);
+  const bot = g.civs.get(rb.civ.id);
+  bot.resources.iron = 20;
+  runBots(g);
+  check(g.researchOrders.get(bot.id) != null, '봇 자동 연구 예약');
+  check(g.ordersOf(bot.id).length >= 1, '봇 자동 이동 명령');
+  g.resolveExecution();
+  check(g.tileCountOf(bot.id) >= 1, `봇 영토 활동 (${g.tileCountOf(bot.id)}타일)`);
+}
+
 (async () => {
   const server = await startServer(PORT, { PHASE_MEETING_MS: '600000', PHASE_EXEC_MS: '1000' });
   try {
@@ -80,6 +99,19 @@ const check = (cond, label) => {
     st = (await admin(PORT, 'GET', 'state')).body;
     check(st.playerCount === 1, '강퇴 후 참가자 1명');
     check(st.players[0].units === 3, '강퇴된 문명 유닛 제거');
+
+    // ── 5.5 봇 추가/제거 (관리자 API)
+    const ab = await admin(PORT, 'POST', 'addBot');
+    check(ab.status === 200 && ab.body.ok, `봇 추가 API (${ab.body.name || ''})`);
+    st = (await admin(PORT, 'GET', 'state')).body;
+    const bot = st.players.find(p => p.isBot);
+    check(!!bot && st.playerCount === 2, '봇 참가 확인');
+    check(bot.units === 3, '진행 중 추가된 봇 유닛 3기 스폰');
+    const rmHuman = await admin(PORT, 'POST', 'removeBot', { civId: A.welcome.you });
+    check(rmHuman.status === 400, '사람은 removeBot으로 제거 불가');
+    await admin(PORT, 'POST', 'removeBot', { civId: bot.id });
+    st = (await admin(PORT, 'GET', 'state')).body;
+    check(st.playerCount === 1 && !st.players.some(p => p.isBot), '봇 제거');
 
     // ── 6. 리셋
     await admin(PORT, 'POST', 'reset');

@@ -39,6 +39,7 @@ class Game {
     this.world = world;
     this.broadcast = broadcast;
     this.onExec = null;
+    this.onMeeting = null;          // 회의 턴 시작 훅 (봇 구동)
     this.settings = {
       meetingMs: settings.meetingMs ?? parseInt(process.env.PHASE_MEETING_MS || '30000', 10),
       execMs: settings.execMs ?? parseInt(process.env.PHASE_EXEC_MS || '10000', 10),
@@ -141,6 +142,7 @@ class Game {
     clearTimeout(this.timer);
     this.timer = setTimeout(() => this.nextPhase(), ms);
     this.broadcast({ type: 'phase', phase: this.phase, turn: this.turn, endsAt: this.phaseEnds });
+    if (this.phase === 'MEETING' && this.onMeeting) this.onMeeting();
   }
 
   controllerOf(u) { return u.controller != null ? u.controller : u.civ; }
@@ -755,6 +757,14 @@ class Game {
     return null;
   }
 
+  // ── 봇 추가 (관리자)
+  addBot() {
+    const r = this.join(undefined, '봇');
+    if (r.spectator) return { ok: false, reason: 'full' };
+    r.civ.isBot = true;
+    return { ok: true, civ: r.civ };
+  }
+
   // ── 접속/재접속
   join(token, playerName) {
     if (token && this.tokens.has(token)) {
@@ -806,6 +816,7 @@ class Game {
       connected: civ.connected, alive: civ.alive, conqueredBy: civ.conqueredBy,
       tech: civ.tech,
       capitalHp: civ.capitalHp, capitalMaxHp: this.maxCapitalHp(civ),
+      isBot: !!civ.isBot,
     };
   }
 

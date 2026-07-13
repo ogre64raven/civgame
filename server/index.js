@@ -5,6 +5,7 @@ const path = require('path');
 const { WebSocketServer } = require('ws');
 const { World } = require('./world');
 const { Game } = require('./game');
+const { runBots } = require('./bots');
 
 const PORT = process.env.PORT || 3000;
 const ADMIN_PASS = process.env.ADMIN_PASSWORD || 'admin1234';
@@ -33,6 +34,7 @@ function notifyConsent(r) {
 
 function makeGame() {
   const g = new Game(world, broadcast);
+  g.onMeeting = () => runBots(g);
   g.onExec = (result) => {
     broadcast({
       type: 'exec', turn: g.turn,
@@ -63,6 +65,7 @@ function adminState() {
     players: [...game.civs.values()].map(c => ({
       id: c.id, name: c.name, code: c.code, player: c.player,
       connected: c.connected, alive: c.alive, conqueredBy: c.conqueredBy,
+      isBot: !!c.isBot,
       units: [...game.units.values()].filter(u => u.civ === c.id).length,
       tiles: game.tileCountOf(c.id),
       score: game.score(c),
@@ -98,6 +101,26 @@ function handleAdmin(req, res, url, body) {
     clearTimeout(game.timer);
     game = makeGame();
     broadcast({ type: 'reset' });
+    return send(200, { ok: true });
+  }
+  if (req.method === 'POST' && url === '/api/admin/addBot') {
+    const r = game.addBot();
+    if (!r.ok) return send(400, r);
+    broadcast({
+      type: 'civJoined',
+      civ: game.civPublic(r.civ),
+      units: [...game.units.values()].filter(u => u.civ === r.civ.id),
+      territory: game.state === 'RUNNING'
+        ? [[r.civ.capital[0], r.civ.capital[1], r.civ.id]] : undefined,
+    });
+    return send(200, { ok: true, civId: r.civ.id, name: r.civ.name });
+  }
+  if (req.method === 'POST' && url === '/api/admin/removeBot') {
+    const civId = Number(body.civId);
+    const civ = game.civs.get(civId);
+    if (!civ || !civ.isBot) return send(400, { error: 'not a bot' });
+    game.kick(civId);
+    broadcast({ type: 'civKicked', civId });
     return send(200, { ok: true });
   }
   if (req.method === 'POST' && url === '/api/admin/kick') {
