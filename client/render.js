@@ -1,160 +1,200 @@
-// Canvas 2D 헥스맵 렌더러 (pointy-top, odd-r offset) — 지형·자원 아이콘·영토·유닛
+// WebGL(Three.js) 3D 렌더러 — 헥스 지형 인스턴싱, 3D 유닛/건물, 전장의 안개, 전투 연출
+// 기존 2D 렌더러와 동일한 인터페이스: { canvas, cam, HEX, draw, centerOn, hexCenter, hexAt, addBattleFx }
 const Render = (() => {
   const canvas = document.getElementById('map');
-  const ctx = canvas.getContext('2d');
-
-  const TERRAIN_COLOR = {
-    '~': '#173a5e', // 바다
-    'g': '#6aa84f', // 초원(곡식)
-    'p': '#c9b458', // 평원(고기)
-    'f': '#38761d', // 숲(목재)
-    'm': '#8d8d8d', // 산(철)
-  };
-
-  const cam = { x: 0, y: 0, zoom: 1 };
+  const cam = { x: 0, y: 0, zoom: 1 };   // 기존 2D 카메라 의미 유지 (input.js 호환)
   const HEX = 14;
   const SQRT3 = Math.sqrt(3);
 
-  // ── 2.5D 입체 렌더링: 타일을 육각 기둥으로 돌출
-  const ISO = 0.62;                                       // 시점 기울기 (y 압축)
-  const ELEV_K = { '~': 0, g: 0.28, p: 0.28, f: 0.34, m: 0.9 }; // 지형 높이 (HEX 배수)
-  const elevOf = (t) => HEX * (ELEV_K[t] || 0);
-  function shade(hex, f) {
-    const n = parseInt(hex.slice(1), 16);
-    return `rgb(${Math.round(((n >> 16) & 255) * f)},${Math.round(((n >> 8) & 255) * f)},${Math.round((n & 255) * f)})`;
-  }
-  // 옆면(스커트): 아랫변 꼭짓점 3개를 바닥까지 내림
-  function drawSkirt(cx, groundY, topY, r, color) {
-    const pts = [150, 90, 30].map(deg => {
-      const a = Math.PI / 180 * deg;
-      return [cx + r * Math.cos(a), r * Math.sin(a) * ISO];
-    });
-    ctx.beginPath();
-    ctx.moveTo(pts[0][0], topY + pts[0][1]);
-    ctx.lineTo(pts[1][0], topY + pts[1][1]);
-    ctx.lineTo(pts[2][0], topY + pts[2][1]);
-    ctx.lineTo(pts[2][0], groundY + pts[2][1]);
-    ctx.lineTo(pts[1][0], groundY + pts[1][1]);
-    ctx.lineTo(pts[0][0], groundY + pts[0][1]);
-    ctx.closePath();
-    ctx.fillStyle = shade(color, 0.55);
-    ctx.fill();
-  }
-  // 산봉우리 (설산 투톤)
-  function drawPeak(cx, ey) {
-    const r = HEX * 0.55;
-    const top = ey - HEX * 0.55;
-    ctx.beginPath();
-    ctx.moveTo(cx - r, ey + HEX * 0.15 * ISO);
-    ctx.lineTo(cx, top);
-    ctx.lineTo(cx + r, ey + HEX * 0.15 * ISO);
-    ctx.closePath();
-    ctx.fillStyle = '#6f767e';
-    ctx.fill();
-    ctx.beginPath();
-    ctx.moveTo(cx - r * 0.35, top + HEX * 0.19);
-    ctx.lineTo(cx, top);
-    ctx.lineTo(cx + r * 0.35, top + HEX * 0.19);
-    ctx.closePath();
-    ctx.fillStyle = '#e8edf2';
-    ctx.fill();
-  }
+  const TERRAIN_COLOR = { '~': 0x173a5e, g: 0x6aa84f, p: 0xc9b458, f: 0x38761d, m: 0x8d8d8d };
+  const ELEV = { '~': 0, g: 3, p: 3, f: 4, m: 7 };   // 기둥 높이
+  const FOG_COLOR = 0x0c1322;
+
+  // ── three 기본 구성
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0b1220);
+  const camera = new THREE.PerspectiveCamera(50, 1, 1, 6000);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.62));
+  const sun = new THREE.DirectionalLight(0xffffff, 0.75);
+  sun.position.set(0.4, 1, 0.35);
+  scene.add(sun);
 
   function resize() {
-    canvas.width = window.innerWidth * devicePixelRatio;
-    canvas.height = window.innerHeight * devicePixelRatio;
-    canvas.style.width = window.innerWidth + 'px';
-    canvas.style.height = window.innerHeight + 'px';
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
   }
   window.addEventListener('resize', resize);
   resize();
 
-  function hexCenter(x, y) {
-    const s = HEX;
-    return [s * SQRT3 * (x + 0.5 * (y & 1)) + s, s * 1.5 * y * ISO + s];
+  // ── 좌표: 헥스 → 평면(XZ)
+  function worldPos(x, y) {
+    return [HEX * SQRT3 * (x + 0.5 * (y & 1)) + HEX, HEX * 1.5 * y + HEX];
+  }
+  function hexCenter(x, y) { return worldPos(x, y); }
+  const topY = (t) => ELEV[t] || 0;
+
+  // ── 재질/지오메트리 캐시
+  const mat = (color, opts) => new THREE.MeshLambertMaterial(Object.assign({ color }, opts || {}));
+  const GEO = {
+    hex1: new THREE.CylinderGeometry(HEX * 0.94, HEX * 0.94, 1, 6),
+    overlay: new THREE.CylinderGeometry(HEX * 0.9, HEX * 0.9, 0.8, 6),
+    fog: new THREE.CylinderGeometry(HEX * 0.985, HEX * 0.985, 26, 6),
+    peak: new THREE.ConeGeometry(HEX * 0.62, 11, 6),
+    tree: new THREE.ConeGeometry(HEX * 0.3, 7, 6),
+    ring: new THREE.RingGeometry(HEX * 0.8, HEX * 0.97, 6),
+  };
+
+  // 텍스트 스프라이트 (라벨용)
+  const textCache = new Map();
+  function textSprite(text, color, worldH) {
+    const key = text + '|' + color;
+    let tex = textCache.get(key);
+    if (!tex) {
+      const c = document.createElement('canvas');
+      c.width = 256; c.height = 64;
+      const g = c.getContext('2d');
+      g.font = 'bold 40px sans-serif';
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.lineWidth = 6;
+      g.strokeStyle = 'rgba(0,0,0,.75)';
+      g.strokeText(text, 128, 32);
+      g.fillStyle = color;
+      g.fillText(text, 128, 32);
+      tex = new THREE.CanvasTexture(c);
+      textCache.set(key, tex);
+    }
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false }));
+    sp.scale.set(worldH * 4, worldH, 1);
+    return sp;
   }
 
-  function hexAt(screenX, screenY, map) {
-    const wx = (screenX + cam.x) / cam.zoom;
-    const wy = (screenY + cam.y) / cam.zoom;
-    const yGuess = Math.round((wy - HEX) / (1.5 * HEX * ISO));
-    let best = null, bestD = Infinity;
-    for (let y = yGuess - 1; y <= yGuess + 1; y++) {
-      if (y < 0 || y >= map.h) continue;
-      const xGuess = Math.round((wx - HEX) / (SQRT3 * HEX) - 0.5 * (y & 1));
-      for (let x = xGuess - 1; x <= xGuess + 1; x++) {
-        if (x < 0 || x >= map.w) continue;
-        const [cx, cy] = hexCenter(x, y);
-        const d = (cx - wx) ** 2 + ((cy - wy) / ISO) ** 2;
-        if (d < bestD) { bestD = d; best = [x, y]; }
+  // ── 3D 유닛 피규어 (군사 레벨별 장비)
+  function makeFigure(colorHex, mil) {
+    const g = new THREE.Group();
+    const c = new THREE.Color(colorHex);
+    const body = mat(c);
+    const H = 9; // 키
+    const torso = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 1.9, H * 0.5, 8), body);
+    torso.position.y = H * 0.45;
+    g.add(torso);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(1.7, 10, 8), body);
+    head.position.y = H * 0.82;
+    g.add(head);
+    const legGeo = new THREE.CylinderGeometry(0.55, 0.55, H * 0.32, 6);
+    for (const s of [-1, 1]) {
+      const leg = new THREE.Mesh(legGeo, body);
+      leg.position.set(s * 0.9, H * 0.16, 0);
+      g.add(leg);
+    }
+    const add = (mesh, x, y, z, rz) => {
+      mesh.position.set(x, y, z);
+      if (rz) mesh.rotation.z = rz;
+      g.add(mesh);
+    };
+    if (mil <= 0) { // 돌도끼
+      add(new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 5, 6), mat(0x8b5a2b)), 2.6, H * 0.55, 0, 0.5);
+      add(new THREE.Mesh(new THREE.SphereGeometry(0.9, 8, 6), mat(0x9aa0a6)), 3.9, H * 0.72, 0);
+    } else if (mil === 1) { // 창
+      add(new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 12, 6), mat(0xa97142)), 2.6, H * 0.55, 0);
+      add(new THREE.Mesh(new THREE.ConeGeometry(0.7, 2, 6), mat(0xc9d1d9)), 2.6, H * 0.55 + 7, 0);
+    } else if (mil === 2) { // 검 + 방패
+      add(new THREE.Mesh(new THREE.BoxGeometry(0.5, 6, 0.5), mat(0xd7dde3)), 2.8, H * 0.62, 0, -0.5);
+      add(new THREE.Mesh(new THREE.CylinderGeometry(1.7, 1.7, 0.5, 10), mat(0xb08d57)), -2.6, H * 0.5, 0, Math.PI / 2);
+    } else if (mil === 3) { // 철투구 + 검 + 방패
+      add(new THREE.Mesh(new THREE.SphereGeometry(1.85, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2), mat(0xc9d1d9)), 0, H * 0.84, 0);
+      add(new THREE.Mesh(new THREE.BoxGeometry(0.5, 7, 0.5), mat(0xe8edf2)), 2.9, H * 0.66, 0, -0.5);
+      add(new THREE.Mesh(new THREE.CylinderGeometry(2, 2, 0.5, 10), mat(0x8f98a3)), -2.7, H * 0.5, 0, Math.PI / 2);
+    } else if (mil === 4) { // 챙모자 + 머스킷
+      add(new THREE.Mesh(new THREE.CylinderGeometry(2.6, 2.6, 0.4, 10), mat(0x2f3b4c)), 0, H * 0.9, 0);
+      add(new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.2, 1.4, 10), mat(0x2f3b4c)), 0, H * 0.98, 0);
+      add(new THREE.Mesh(new THREE.BoxGeometry(0.55, 11, 0.55), mat(0x5b4636)), 2.7, H * 0.6, 0, 0.35);
+    } else { // 현대군: 방탄모 + 방탄복 + 소총
+      add(new THREE.Mesh(new THREE.SphereGeometry(1.95, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2), mat(0x4a5d3a)), 0, H * 0.82, 0);
+      add(new THREE.Mesh(new THREE.BoxGeometry(3.6, 4, 2.4), mat(0x3b4a33)), 0, H * 0.5, 0);
+      add(new THREE.Mesh(new THREE.BoxGeometry(8, 0.7, 0.7), mat(0x1c1f24)), 0.8, H * 0.52, 1.6);
+    }
+    return g;
+  }
+
+  // ── 수도 건물 (채집+이동+방어 합산 6단계)
+  function makeBuilding(civ) {
+    const t = civ.tech || {};
+    const tier = Math.min(5, Math.floor(((t.gather || 0) + (t.move || 0) + (t.defense || 0)) / 3));
+    const g = new THREE.Group();
+    const gray = mat(0xa8b0b8), dark = mat(0x6f767e);
+    if (tier === 0) { // 스톤헨지
+      for (const dx of [-4, 0, 4]) {
+        const st = new THREE.Mesh(new THREE.BoxGeometry(2, 8, 2), gray);
+        st.position.set(dx, 4, 0);
+        g.add(st);
       }
+      const lin = new THREE.Mesh(new THREE.BoxGeometry(11, 1.6, 2.4), dark);
+      lin.position.y = 8.6;
+      g.add(lin);
+    } else if (tier === 1) { // 움집
+      const hut = new THREE.Mesh(new THREE.ConeGeometry(6, 9, 8), mat(0x8b5a2b));
+      hut.position.y = 4.5;
+      g.add(hut);
+    } else if (tier === 2) { // 석성 + 깃발
+      const keep = new THREE.Mesh(new THREE.BoxGeometry(9, 8, 9), gray);
+      keep.position.y = 4;
+      g.add(keep);
+      for (const [dx, dz] of [[-4, -4], [4, -4], [-4, 4], [4, 4]]) {
+        const tw = new THREE.Mesh(new THREE.BoxGeometry(2.4, 11, 2.4), dark);
+        tw.position.set(dx, 5.5, dz);
+        g.add(tw);
+      }
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 6, 6), dark);
+      pole.position.y = 13;
+      g.add(pole);
+      const flag = new THREE.Mesh(new THREE.BoxGeometry(3.4, 2, 0.2), mat(new THREE.Color(civ.color)));
+      flag.position.set(1.8, 15, 0);
+      g.add(flag);
+    } else if (tier === 3) { // 신전
+      const base = new THREE.Mesh(new THREE.BoxGeometry(13, 1.6, 9), mat(0xe8e2d0));
+      base.position.y = 0.8;
+      g.add(base);
+      for (const dx of [-5, -2.5, 0, 2.5, 5]) {
+        const col = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.8, 7, 8), mat(0xefe9d8));
+        col.position.set(dx, 5, 0);
+        g.add(col);
+      }
+      const roof = new THREE.Mesh(new THREE.ConeGeometry(8.6, 4, 4), mat(0xd9d2bd));
+      roof.position.y = 10.4;
+      roof.rotation.y = Math.PI / 4;
+      g.add(roof);
+    } else if (tier === 4) { // 공장
+      const bld = new THREE.Mesh(new THREE.BoxGeometry(11, 8, 8), mat(0x7d4438));
+      bld.position.y = 4;
+      g.add(bld);
+      const chim = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.5, 12, 8), mat(0x5f3129));
+      chim.position.set(4, 9, -2);
+      g.add(chim);
+      const smoke = new THREE.Mesh(new THREE.SphereGeometry(1.8, 8, 6),
+        new THREE.MeshLambertMaterial({ color: 0xcccccc, transparent: true, opacity: 0.55 }));
+      smoke.position.set(4.5, 17, -2);
+      g.add(smoke);
+    } else { // 마천루
+      const glass = (w, h, d, x, z, color) => {
+        const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(color));
+        m.position.set(x, h / 2, z);
+        g.add(m);
+      };
+      glass(4.5, 15, 4.5, -5, 1, 0x38506b);
+      glass(4.5, 11, 4.5, 5, -1, 0x38506b);
+      glass(5, 23, 5, 0, 0, 0x5fa8d3);
+      const ant = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 5, 6), mat(0x9aa0a6));
+      ant.position.y = 25.5;
+      g.add(ant);
     }
-    return bestD <= (HEX * 1.1) ** 2 ? best : null;
+    return g;
   }
 
-  function drawHexPath(cx, cy, r) {
-    ctx.beginPath();
-    for (let i = 0; i < 6; i++) {
-      const a = Math.PI / 180 * (60 * i - 30);
-      const px = cx + r * Math.cos(a), py = cy + r * Math.sin(a) * ISO;
-      i ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
-    }
-    ctx.closePath();
-  }
-
-  function drawHex(cx, cy, r, fill, stroke, lineWidth) {
-    drawHexPath(cx, cy, r);
-    if (fill) { ctx.fillStyle = fill; ctx.fill(); }
-    if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = lineWidth || 1; ctx.stroke(); }
-  }
-
-  // 자원 아이콘 (헥스 상단에 작게)
-  function drawResourceIcon(t, cx, cy) {
-    const s = HEX * 0.22;
-    const iy = cy - HEX * 0.5;
-    switch (t) {
-      case 'p': // 고기: 갈색 원
-        ctx.beginPath();
-        ctx.arc(cx, iy, s * 0.8, 0, Math.PI * 2);
-        ctx.fillStyle = '#7c3f10';
-        ctx.fill();
-        break;
-      case 'g': // 곡식: 노란 이삭 (세로선 3개)
-        ctx.strokeStyle = '#ffe066';
-        ctx.lineWidth = 1.2;
-        ctx.beginPath();
-        for (let i = -1; i <= 1; i++) {
-          ctx.moveTo(cx + i * s * 0.7, iy + s);
-          ctx.lineTo(cx + i * s * 0.7, iy - s);
-        }
-        ctx.stroke();
-        break;
-      case 'f': // 목재: 진한 초록 삼각형 (나무)
-        ctx.beginPath();
-        ctx.moveTo(cx, iy - s);
-        ctx.lineTo(cx - s, iy + s);
-        ctx.lineTo(cx + s, iy + s);
-        ctx.closePath();
-        ctx.fillStyle = '#1c4a12';
-        ctx.fill();
-        break;
-      case 'm': // 철: 회백색 다이아몬드
-        ctx.beginPath();
-        ctx.moveTo(cx, iy - s);
-        ctx.lineTo(cx + s, iy);
-        ctx.lineTo(cx, iy + s);
-        ctx.lineTo(cx - s, iy);
-        ctx.closePath();
-        ctx.fillStyle = '#dfe4ea';
-        ctx.fill();
-        ctx.strokeStyle = '#555';
-        ctx.lineWidth = 0.8;
-        ctx.stroke();
-        break;
-    }
-  }
-
-  // ── 전장의 안개: 내 세력(유닛·영토·수도) + 동맹 기준 3헥스 시야
+  // ── 전장의 안개 (기존 로직 그대로)
   const VISION_RANGE = 3;
   function hexNeighbors(map, x, y) {
     const even = [[1, 0], [0, -1], [-1, -1], [-1, 0], [-1, 1], [0, 1]];
@@ -168,7 +208,6 @@ const Render = (() => {
     return out;
   }
   function computeVision(state) {
-    // 관전자·게임 종료 시엔 전체 공개
     if (state.spectator || state.ended || state.you == null) return null;
     const map = state.map;
     const pk = (a, b) => Math.min(a, b) + ':' + Math.max(a, b);
@@ -206,501 +245,399 @@ const Render = (() => {
     return seen;
   }
 
-  // 수도 건물: 채집+이동+방어 레벨 합(0~15)에 따라 6단계 발전 (스톤헨지 → 마천루)
-  function drawCapitalBuilding(cx, cy, civ) {
-    const t = civ.tech || {};
-    const sum = (t.gather || 0) + (t.move || 0) + (t.defense || 0);
-    const tier = Math.min(5, Math.floor(sum / 3));
-    const s = HEX;
-    const base = cy + s * 0.45;
-    ctx.lineCap = 'butt';
-    if (tier === 0) {
-      // 스톤헨지
-      ctx.fillStyle = '#a8b0b8';
-      const w = s * 0.18, h = s * 0.6;
-      ctx.fillRect(cx - s * 0.42, base - h, w, h);
-      ctx.fillRect(cx - w / 2, base - h, w, h);
-      ctx.fillRect(cx + s * 0.42 - w, base - h, w, h);
-      ctx.fillStyle = '#8d949c';
-      ctx.fillRect(cx - s * 0.5, base - h - s * 0.14, s, s * 0.14);
-    } else if (tier === 1) {
-      // 움집
-      ctx.fillStyle = '#8b5a2b';
-      ctx.beginPath();
-      ctx.moveTo(cx, base - s * 0.78);
-      ctx.lineTo(cx - s * 0.5, base);
-      ctx.lineTo(cx + s * 0.5, base);
-      ctx.closePath();
-      ctx.fill();
-      ctx.strokeStyle = '#5b3a1a';
-      ctx.lineWidth = 1;
-      ctx.stroke();
-      ctx.fillStyle = '#4a2e14';
-      ctx.fillRect(cx - s * 0.09, base - s * 0.26, s * 0.18, s * 0.26);
-    } else if (tier === 2) {
-      // 석성 (흉벽 + 깃발)
-      ctx.fillStyle = '#9aa4ae';
-      ctx.fillRect(cx - s * 0.4, base - s * 0.55, s * 0.8, s * 0.55);
-      for (let i = -1; i <= 1; i++) ctx.fillRect(cx + i * s * 0.3 - s * 0.07, base - s * 0.68, s * 0.14, s * 0.13);
-      ctx.fillStyle = '#4a3324';
-      ctx.fillRect(cx - s * 0.1, base - s * 0.24, s * 0.2, s * 0.24);
-      ctx.strokeStyle = '#666';
-      ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(cx, base - s * 0.68); ctx.lineTo(cx, base - s * 0.95); ctx.stroke();
-      ctx.fillStyle = civ.color;
-      ctx.beginPath();
-      ctx.moveTo(cx, base - s * 0.95);
-      ctx.lineTo(cx + s * 0.24, base - s * 0.88);
-      ctx.lineTo(cx, base - s * 0.81);
-      ctx.closePath();
-      ctx.fill();
-    } else if (tier === 3) {
-      // 신전·궁전 (기둥 + 페디먼트)
-      ctx.fillStyle = '#e8e2d0';
-      ctx.fillRect(cx - s * 0.52, base - s * 0.12, s * 1.04, s * 0.12);
-      for (let i = -2; i <= 2; i++) ctx.fillRect(cx + i * s * 0.22 - s * 0.045, base - s * 0.55, s * 0.09, s * 0.43);
-      ctx.fillRect(cx - s * 0.52, base - s * 0.66, s * 1.04, s * 0.11);
-      ctx.beginPath();
-      ctx.moveTo(cx - s * 0.55, base - s * 0.66);
-      ctx.lineTo(cx, base - s * 0.95);
-      ctx.lineTo(cx + s * 0.55, base - s * 0.66);
-      ctx.closePath();
-      ctx.fill();
-    } else if (tier === 4) {
-      // 산업시대 공장 (벽돌 + 굴뚝 + 연기)
-      ctx.fillStyle = '#7d4438';
-      ctx.fillRect(cx - s * 0.5, base - s * 0.6, s * 0.85, s * 0.6);
-      ctx.fillStyle = '#5f3129';
-      ctx.fillRect(cx + s * 0.28, base - s * 0.95, s * 0.16, s * 0.95);
-      ctx.fillStyle = '#ffd76a';
-      for (let r = 0; r < 2; r++)
-        for (let c2 = 0; c2 < 3; c2++)
-          ctx.fillRect(cx - s * 0.42 + c2 * s * 0.26, base - s * 0.5 + r * s * 0.28, s * 0.13, s * 0.15);
-      ctx.fillStyle = 'rgba(210,210,210,.55)';
-      ctx.beginPath(); ctx.arc(cx + s * 0.36, base - s * 1.05, s * 0.11, 0, Math.PI * 2); ctx.fill();
-      ctx.beginPath(); ctx.arc(cx + s * 0.48, base - s * 1.18, s * 0.08, 0, Math.PI * 2); ctx.fill();
-    } else {
-      // 마천루 (유리 타워 3동 + 안테나)
-      ctx.fillStyle = '#38506b';
-      ctx.fillRect(cx - s * 0.55, base - s * 0.75, s * 0.3, s * 0.75);
-      ctx.fillRect(cx + s * 0.25, base - s * 0.6, s * 0.3, s * 0.6);
-      ctx.fillStyle = '#5fa8d3';
-      ctx.fillRect(cx - s * 0.14, base - s * 1.15, s * 0.28, s * 1.15);
-      ctx.fillStyle = '#dbeafe';
-      for (let r = 0; r < 5; r++) ctx.fillRect(cx - s * 0.08, base - s * 1.05 + r * s * 0.22, s * 0.16, s * 0.07);
-      for (let r = 0; r < 3; r++) {
-        ctx.fillRect(cx - s * 0.49, base - s * 0.65 + r * s * 0.22, s * 0.18, s * 0.06);
-        ctx.fillRect(cx + s * 0.31, base - s * 0.5 + r * s * 0.18, s * 0.18, s * 0.06);
-      }
-      ctx.strokeStyle = '#9aa0a6';
-      ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(cx, base - s * 1.15); ctx.lineTo(cx, base - s * 1.38); ctx.stroke();
-    }
-  }
+  // ── 씬 계층
+  let inited = false;
+  let terrainGroup = null;
+  let fogMesh = null, territoryMesh = null;
+  const dynamicGroup = new THREE.Group();  // 유닛·건물·경로·라벨 (재구축 대상)
+  const fxGroup = new THREE.Group();       // 전투 연출
+  scene.add(dynamicGroup, fxGroup);
+  let selRing = null;
+  const dummy = new THREE.Object3D();
 
-  // 사람 모양 유닛 (군사 기술 레벨에 따라 무기·갑옷 발전: 석기 → 현대군)
-  function drawUnitFigure(cx, cy, s, color, mil) {
-    const headR = s * 0.3;
-    const headY = cy - s * 0.62;
-    const bodyY0 = headY + headR * 0.95;
-    const bodyY1 = cy + s * 0.32;
-    const legY = cy + s * 0.95;
-    const armY = bodyY0 + s * 0.22;
-    const wx = cx + s * 0.45, wy = armY + s * 0.28; // 오른손
-    ctx.lineCap = 'round';
+  function initStatic(map) {
+    terrainGroup = new THREE.Group();
+    // 바다: 단일 평면
+    const seaW = HEX * SQRT3 * (map.w + 1), seaH = HEX * 1.5 * (map.h + 1);
+    const sea = new THREE.Mesh(new THREE.PlaneGeometry(seaW * 1.6, seaH * 1.6), mat(TERRAIN_COLOR['~']));
+    sea.rotation.x = -Math.PI / 2;
+    sea.position.set(seaW / 2, -0.6, seaH / 2);
+    terrainGroup.add(sea);
 
-    // 다리·몸통·팔 (문명 색)
-    ctx.strokeStyle = color;
-    ctx.lineWidth = s * 0.2;
-    ctx.beginPath();
-    ctx.moveTo(cx, bodyY1); ctx.lineTo(cx - s * 0.3, legY);
-    ctx.moveTo(cx, bodyY1); ctx.lineTo(cx + s * 0.3, legY);
-    ctx.moveTo(cx, bodyY0); ctx.lineTo(cx, bodyY1);
-    ctx.moveTo(cx, armY); ctx.lineTo(cx - s * 0.45, armY + s * 0.3);
-    ctx.moveTo(cx, armY); ctx.lineTo(wx, wy);
-    ctx.stroke();
-    // 머리
-    ctx.beginPath();
-    ctx.arc(cx, headY, headR, 0, Math.PI * 2);
-    ctx.fillStyle = color;
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(0,0,0,.5)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-
-    // 장비 (군사 레벨)
-    if (mil <= 0) {
-      // 돌도끼
-      ctx.strokeStyle = '#8b5a2b'; ctx.lineWidth = s * 0.14;
-      ctx.beginPath(); ctx.moveTo(wx, wy + s * 0.2); ctx.lineTo(wx + s * 0.12, wy - s * 0.6); ctx.stroke();
-      ctx.fillStyle = '#9aa0a6';
-      ctx.beginPath(); ctx.arc(wx + s * 0.14, wy - s * 0.66, s * 0.16, 0, Math.PI * 2); ctx.fill();
-    } else if (mil === 1) {
-      // 창
-      ctx.strokeStyle = '#a97142'; ctx.lineWidth = s * 0.11;
-      ctx.beginPath(); ctx.moveTo(wx, wy + s * 0.45); ctx.lineTo(wx, wy - s * 1.0); ctx.stroke();
-      ctx.fillStyle = '#c9d1d9';
-      ctx.beginPath();
-      ctx.moveTo(wx, wy - s * 1.3); ctx.lineTo(wx - s * 0.12, wy - s * 0.95); ctx.lineTo(wx + s * 0.12, wy - s * 0.95);
-      ctx.closePath(); ctx.fill();
-    } else if (mil === 2) {
-      // 검 + 원형 방패
-      ctx.strokeStyle = '#d7dde3'; ctx.lineWidth = s * 0.11;
-      ctx.beginPath(); ctx.moveTo(wx, wy); ctx.lineTo(wx + s * 0.38, wy - s * 0.72); ctx.stroke();
-      ctx.strokeStyle = '#8b5a2b'; ctx.lineWidth = s * 0.1;
-      ctx.beginPath(); ctx.moveTo(wx - s * 0.1, wy - s * 0.12); ctx.lineTo(wx + s * 0.16, wy + s * 0.02); ctx.stroke();
-      ctx.fillStyle = '#b08d57';
-      ctx.beginPath(); ctx.arc(cx - s * 0.5, armY + s * 0.32, s * 0.3, 0, Math.PI * 2); ctx.fill();
-      ctx.strokeStyle = 'rgba(0,0,0,.4)'; ctx.lineWidth = 1; ctx.stroke();
-    } else if (mil === 3) {
-      // 철투구 + 검 + 카이트 방패
-      ctx.fillStyle = '#c9d1d9';
-      ctx.beginPath(); ctx.arc(cx, headY - headR * 0.12, headR * 1.06, Math.PI, 0); ctx.fill();
-      ctx.fillRect(cx - headR * 1.06, headY - headR * 0.15, headR * 2.12, headR * 0.28);
-      ctx.strokeStyle = '#e8edf2'; ctx.lineWidth = s * 0.12;
-      ctx.beginPath(); ctx.moveTo(wx, wy); ctx.lineTo(wx + s * 0.42, wy - s * 0.82); ctx.stroke();
-      ctx.fillStyle = '#8f98a3';
-      const sx0 = cx - s * 0.52, sy0 = armY + s * 0.02;
-      ctx.beginPath();
-      ctx.moveTo(sx0, sy0); ctx.lineTo(sx0 + s * 0.32, sy0 + s * 0.14);
-      ctx.lineTo(sx0 + s * 0.16, sy0 + s * 0.75); ctx.lineTo(sx0 - s * 0.14, sy0 + s * 0.4);
-      ctx.closePath(); ctx.fill();
-    } else if (mil === 4) {
-      // 챙모자 + 머스킷 장총
-      ctx.fillStyle = '#2f3b4c';
-      ctx.fillRect(cx - headR * 1.25, headY - headR * 1.05, headR * 2.5, headR * 0.42);
-      ctx.fillRect(cx - headR * 0.7, headY - headR * 1.5, headR * 1.4, headR * 0.55);
-      ctx.strokeStyle = '#5b4636'; ctx.lineWidth = s * 0.12;
-      ctx.beginPath(); ctx.moveTo(wx - s * 0.18, wy + s * 0.32); ctx.lineTo(wx + s * 0.34, wy - s * 0.85); ctx.stroke();
-      ctx.strokeStyle = '#9aa0a6'; ctx.lineWidth = s * 0.07;
-      ctx.beginPath(); ctx.moveTo(wx + s * 0.16, wy - s * 0.42); ctx.lineTo(wx + s * 0.34, wy - s * 0.85); ctx.stroke();
-    } else {
-      // 현대군: 방탄모 + 방탄복 + 수평 소총
-      ctx.fillStyle = '#4a5d3a';
-      ctx.beginPath(); ctx.arc(cx, headY, headR * 1.12, Math.PI * 0.92, Math.PI * 2.08); ctx.fill();
-      ctx.fillStyle = '#3b4a33';
-      ctx.fillRect(cx - s * 0.24, bodyY0 + s * 0.05, s * 0.48, s * 0.52);
-      ctx.strokeStyle = '#1c1f24'; ctx.lineWidth = s * 0.12;
-      ctx.beginPath(); ctx.moveTo(cx - s * 0.55, armY + s * 0.32); ctx.lineTo(cx + s * 0.62, armY + s * 0.2); ctx.stroke();
-      ctx.fillStyle = '#1c1f24';
-      ctx.fillRect(cx + s * 0.08, armY + s * 0.26, s * 0.14, s * 0.28);
-    }
-  }
-
-  // ── 전투 연출 (격돌 → 타격 스파크 → 승패/무승부 결과)
-  const FX_MS = 3000;
-  let battleFx = [];
-  function addBattleFx(fx) {
-    fx.start = Date.now();
-    battleFx.push(fx);
-  }
-
-  function drawSpark(cx, cy, r, seed) {
-    ctx.strokeStyle = '#ffe066';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    for (let i = 0; i < 8; i++) {
-      const a = (Math.PI * 2 * i) / 8 + seed;
-      const len = r * (0.45 + 0.3 * Math.abs(Math.sin(seed * 9 + i * 2)));
-      ctx.moveTo(cx + Math.cos(a) * r * 0.18, cy + Math.sin(a) * r * 0.18);
-      ctx.lineTo(cx + Math.cos(a) * len, cy + Math.sin(a) * len);
-    }
-    ctx.stroke();
-    ctx.fillStyle = '#ffffff';
-    ctx.beginPath();
-    ctx.arc(cx, cy, r * 0.12, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  function drawBattleFx(fx, nowMs, isVis, state) {
-    const [hx, hy] = fx.hex;
-    if (!isVis(hx, hy)) return;
-    const [cx, cyRaw] = hexCenter(hx, hy);
-    const cy = cyRaw - ((state.map && state.map.rows[hy]) ? elevOf(state.map.rows[hy][hx]) : 0);
-    const t = (nowMs - fx.start) / 1000;
-    const s = HEX * 0.5;
-    const info = (id) => {
-      const c = state.civs.get(id);
-      return { color: c ? c.color : '#94a3b8', mil: (c && c.tech && c.tech.military) || 0 };
-    };
-    const L = info(fx.winners[0]);
-    const R = info(fx.draw ? (fx.winners[1] != null ? fx.winners[1] : fx.winners[0]) : fx.losers[0]);
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-
-    if (t < 1.6) {
-      // ① 격돌: 서로 부딪히며 타격
-      const bounce = Math.abs(Math.sin(t * 7));
-      const gap = HEX * (0.28 + 0.5 * bounce);
-      drawUnitFigure(cx - gap, cy, s, L.color, L.mil);
-      ctx.save();
-      ctx.translate(cx + gap, cy);
-      ctx.scale(-1, 1); // 오른쪽은 왼쪽을 향하도록 반전
-      drawUnitFigure(0, 0, s, R.color, R.mil);
-      ctx.restore();
-      if (bounce < 0.4) drawSpark(cx, cy - s * 0.25, HEX * 0.6, t * 5);
-      // 흙먼지
-      ctx.fillStyle = 'rgba(200,190,160,.35)';
-      for (let i = 0; i < 3; i++) {
-        const a = t * 3 + i * 2.1;
-        ctx.beginPath();
-        ctx.arc(cx + Math.cos(a) * HEX * 0.7, cy + s * 0.8, s * (0.12 + 0.06 * Math.sin(a * 2)), 0, Math.PI * 2);
-        ctx.fill();
-      }
-    } else {
-      // ② 결과
-      const p = Math.min(1, (t - 1.6) / 0.4);
-      if (fx.draw) {
-        // 무승부: 양쪽 모두 주저앉아 어질어질
-        for (const side of [-1, 1]) {
-          const bx = cx + side * HEX * 0.5;
-          const c = side < 0 ? L : R;
-          ctx.save();
-          ctx.translate(bx, cy + s * 0.3);
-          ctx.rotate(side * 0.3);
-          ctx.globalAlpha = 0.8;
-          drawUnitFigure(0, 0, s * 0.9, c.color, c.mil);
-          ctx.restore();
-          ctx.globalAlpha = 1;
-          ctx.fillStyle = '#ffe066';
-          for (let i = 0; i < 3; i++) {
-            const a = t * 4 + i * 2.09;
-            ctx.beginPath();
-            ctx.arc(bx + Math.cos(a) * s * 0.55, cy - s * 0.9 + Math.sin(a) * s * 0.18, 1.6, 0, Math.PI * 2);
-            ctx.fill();
-          }
-        }
-        ctx.globalAlpha = p;
-        ctx.fillStyle = '#cbd5e1';
-        ctx.font = `bold ${HEX * 0.55}px sans-serif`;
-        ctx.fillText('무승부', cx, cy - HEX * 1.25);
-        ctx.globalAlpha = 1;
-      } else {
-        // 승자: 무기 치켜들고 환호
-        const cheer = Math.sin(t * 6) * s * 0.08;
-        drawUnitFigure(cx - HEX * 0.35, cy + cheer, s, L.color, L.mil);
-        ctx.strokeStyle = L.color;
-        ctx.lineWidth = s * 0.18;
-        ctx.lineCap = 'round';
-        ctx.beginPath();
-        ctx.moveTo(cx - HEX * 0.35, cy + cheer - s * 0.1);
-        ctx.lineTo(cx - HEX * 0.35 - s * 0.55, cy + cheer - s * 0.85);
-        ctx.stroke();
-        // 패자: 쓰러짐
-        ctx.save();
-        ctx.translate(cx + HEX * 0.55, cy + s * 0.65);
-        ctx.rotate(1.35);
-        ctx.globalAlpha = Math.max(0.25, 0.7 - p * 0.3);
-        drawUnitFigure(0, 0, s * 0.85, R.color, R.mil);
-        ctx.restore();
-        ctx.globalAlpha = p;
-        ctx.fillStyle = L.color;
-        ctx.font = `bold ${HEX * 0.55}px sans-serif`;
-        ctx.fillText('승리!', cx - HEX * 0.35, cy - HEX * 1.25);
-        ctx.fillStyle = '#94a3b8';
-        ctx.font = `bold ${HEX * 0.4}px sans-serif`;
-        ctx.fillText('패배', cx + HEX * 0.55, cy - HEX * 0.7);
-        ctx.globalAlpha = 1;
-      }
-    }
-  }
-
-  function draw(state) {
-    if (!state.map) return;
-    const map = state.map;
-    const vision = computeVision(state);
-    const isVis = (x, y) => !vision || vision.has(x + ',' + y);
-    const nowMs = Date.now();
-    battleFx = battleFx.filter(f => nowMs - f.start < FX_MS);
-    const fxHexes = new Set(battleFx.map(f => f.hex[0] + ',' + f.hex[1]));
-    ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
-    ctx.fillStyle = '#0b1220';
-    ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
-    ctx.translate(-cam.x, -cam.y);
-    ctx.scale(cam.zoom, cam.zoom);
-
-    const z = cam.zoom;
-    const viewL = cam.x / z, viewT = cam.y / z;
-    const viewR = viewL + window.innerWidth / z, viewB = viewT + window.innerHeight / z;
-    const inView = (cx, cy) =>
-      cx > viewL - HEX * 2 && cx < viewR + HEX * 2 && cy > viewT - HEX * 2 && cy < viewB + HEX * 2;
-
-    // 타일 + 영토 + 자원 아이콘
-    for (let y = 0; y < map.h; y++) {
-      const [, cy] = hexCenter(0, y);
-      if (cy < viewT - HEX * 3 || cy > viewB + HEX * 3) continue;
-      const row = map.rows[y];
+    // 지형별 인스턴싱
+    const byType = { g: [], p: [], f: [], m: [] };
+    for (let y = 0; y < map.h; y++)
       for (let x = 0; x < map.w; x++) {
-        const [cx] = hexCenter(x, y);
-        if (cx < viewL - HEX * 2 || cx > viewR + HEX * 2) continue;
-        const t = row[x];
-        if (!isVis(x, y)) {
-          drawHex(cx, cy, HEX - 0.3, '#0c1322', 'rgba(148,163,184,.05)');
-          continue;
-        }
-        const elev = elevOf(t);
-        const ey = cy - elev;
-        if (elev > 0) drawSkirt(cx, cy, ey, HEX - 0.5, TERRAIN_COLOR[t]);
-        drawHex(cx, ey, HEX - 0.5, TERRAIN_COLOR[t], t === '~' ? null : 'rgba(0,0,0,.28)');
-        if (t === '~') continue;
-        if (t === 'm') drawPeak(cx, ey);
-
-        // 영토 색칠 (윗면)
-        const owner = state.territory.get(x + ',' + y);
-        if (owner != null) {
-          const civ = state.civs.get(owner);
-          if (civ) {
-            ctx.globalAlpha = 0.4;
-            drawHex(cx, ey, HEX - 0.5, civ.color);
-            ctx.globalAlpha = 1;
-            drawHex(cx, ey, HEX - 1.2, null, civ.color, 1.2);
-          }
-        }
-        // 자원 아이콘 (확대 시, 산은 봉우리가 대신함)
-        if (z > 1.1 && t !== 'm') drawResourceIcon(t, cx, ey);
+        const t = map.rows[y][x];
+        if (t !== '~') byType[t].push([x, y]);
+      }
+    for (const t of ['g', 'p', 'f', 'm']) {
+      const list = byType[t];
+      const im = new THREE.InstancedMesh(GEO.hex1, mat(TERRAIN_COLOR[t]), list.length);
+      list.forEach(([x, y], i) => {
+        const [wx, wz] = worldPos(x, y);
+        const h = ELEV[t];
+        dummy.position.set(wx, h / 2, wz);
+        dummy.scale.set(1, h, 1);
+        dummy.rotation.set(0, 0, 0);
+        dummy.updateMatrix();
+        im.setMatrixAt(i, dummy.matrix);
+      });
+      terrainGroup.add(im);
+      // 산봉우리 / 숲 나무
+      if (t === 'm' || t === 'f') {
+        const deco = new THREE.InstancedMesh(
+          t === 'm' ? GEO.peak : GEO.tree,
+          mat(t === 'm' ? 0x7a828b : 0x1c4a12), list.length);
+        list.forEach(([x, y], i) => {
+          const [wx, wz] = worldPos(x, y);
+          dummy.position.set(wx, ELEV[t] + (t === 'm' ? 5.5 : 3.5), wz);
+          dummy.scale.set(1, 1, 1);
+          dummy.rotation.set(0, 0, 0);
+          dummy.updateMatrix();
+          deco.setMatrixAt(i, dummy.matrix);
+        });
+        terrainGroup.add(deco);
       }
     }
+    scene.add(terrainGroup);
 
-    // 수도 마커 (별 표시 링)
+    // 영토 오버레이 (인스턴스 색)
+    const landCount = byType.g.length + byType.p.length + byType.f.length + byType.m.length;
+    territoryMesh = new THREE.InstancedMesh(GEO.overlay,
+      new THREE.MeshLambertMaterial({ transparent: true, opacity: 0.5 }), landCount);
+    territoryMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(landCount * 3), 3);
+    scene.add(territoryMesh);
+
+    // 안개
+    fogMesh = new THREE.InstancedMesh(GEO.fog, new THREE.MeshBasicMaterial({ color: FOG_COLOR }), map.w * map.h);
+    scene.add(fogMesh);
+
+    // 선택 링
+    selRing = new THREE.Mesh(GEO.ring, new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, transparent: true, opacity: 0.9 }));
+    selRing.rotation.x = -Math.PI / 2;
+    selRing.visible = false;
+    scene.add(selRing);
+    inited = true;
+  }
+
+  // ── 동적 재구축 (상태 시그니처 변경 시)
+  let lastSig = '';
+  let visionCache = null, visionAt = 0, fxDirty = false;
+
+  function stateSig(state, vision) {
+    let s = state.you + '|' + state.selected + '|' + (vision ? vision.size : -1) + '|' + state.territory.size + '|' + state.gameState;
+    for (const u of state.units.values()) s += ';' + u.id + ',' + u.x + ',' + u.y + ',' + u.stunned + ',' + (u.controller || 0) + ',' + u.civ;
+    for (const c of state.civs.values()) {
+      const t = c.tech || {};
+      s += ';' + c.id + ',' + (c.alive ? 1 : 0) + ',' + c.capitalHp + ',' + ((t.military || 0) + '' + (t.defense || 0) + (t.gather || 0) + (t.move || 0));
+    }
+    for (const [uid, p] of state.myOrders) s += ';' + uid + ':' + p.length;
+    return s;
+  }
+
+  function disposeGroup(group) {
+    for (const child of [...group.children]) {
+      group.remove(child);
+      child.traverse?.((o) => {
+        if (o.geometry && !Object.values(GEO).includes(o.geometry)) o.geometry.dispose();
+        if (o.material) o.material.dispose?.(); // 텍스처는 캐시 공유라 유지됨
+      });
+    }
+  }
+
+  function rebuild(state, vision) {
+    const map = state.map;
+    const isVis = (x, y) => !vision || vision.has(x + ',' + y);
+
+    // 안개 인스턴스
+    let fi = 0;
+    if (vision) {
+      for (let y = 0; y < map.h; y++)
+        for (let x = 0; x < map.w; x++) {
+          if (vision.has(x + ',' + y)) continue;
+          const [wx, wz] = worldPos(x, y);
+          dummy.position.set(wx, -12.5, wz); // 윗면이 y=0.5
+          dummy.scale.set(1, 1, 1);
+          dummy.rotation.set(0, 0, 0);
+          dummy.updateMatrix();
+          fogMesh.setMatrixAt(fi++, dummy.matrix);
+        }
+    }
+    fogMesh.count = fi;
+    fogMesh.instanceMatrix.needsUpdate = true;
+
+    // 영토 오버레이
+    let ti = 0;
+    const col = new THREE.Color();
+    for (const [k, owner] of state.territory) {
+      const [x, y] = k.split(',').map(Number);
+      if (!isVis(x, y)) continue;
+      const civ = state.civs.get(owner);
+      if (!civ) continue;
+      const [wx, wz] = worldPos(x, y);
+      dummy.position.set(wx, topY(map.rows[y][x]) + 0.5, wz);
+      dummy.scale.set(1, 1, 1);
+      dummy.rotation.set(0, 0, 0);
+      dummy.updateMatrix();
+      territoryMesh.setMatrixAt(ti, dummy.matrix);
+      col.set(civ.color);
+      territoryMesh.setColorAt(ti, col);
+      ti++;
+    }
+    territoryMesh.count = ti;
+    territoryMesh.instanceMatrix.needsUpdate = true;
+    if (territoryMesh.instanceColor) territoryMesh.instanceColor.needsUpdate = true;
+
+    // 유닛·건물·경로·라벨
+    disposeGroup(dynamicGroup);
+
+    // 수도 (링 + 건물 + HP바)
     for (const civ of state.civs.values()) {
-      if (!isVis(civ.capital[0], civ.capital[1])) continue;
-      const [cx, cyRaw] = hexCenter(civ.capital[0], civ.capital[1]);
-      const cy = cyRaw - elevOf(map.rows[civ.capital[1]][civ.capital[0]]);
-      if (!inView(cx, cyRaw)) continue;
-      drawHex(cx, cy, HEX + 1, null, civ.color, 2.5);
-      drawHex(cx, cy, HEX + 3, null, 'rgba(255,255,255,.35)', 1);
-      if (civ.alive) {
-        drawCapitalBuilding(cx, cy, civ);
-        // 수도 HP 바 (피해 시에만 표시)
-        if (civ.capitalMaxHp && civ.capitalHp < civ.capitalMaxHp) {
-          const bw = HEX * 1.6, bh = 3.2;
-          const bx = cx - bw / 2, by2 = cy - HEX * 1.55;
-          ctx.fillStyle = 'rgba(0,0,0,.65)';
-          ctx.fillRect(bx - 0.5, by2 - 0.5, bw + 1, bh + 1);
-          const ratio = Math.max(0, civ.capitalHp / civ.capitalMaxHp);
-          ctx.fillStyle = ratio > 0.4 ? '#4ade80' : '#f87171';
-          ctx.fillRect(bx, by2, bw * ratio, bh);
-        }
+      const [kx, ky] = civ.capital;
+      if (!isVis(kx, ky)) continue;
+      const [wx, wz] = worldPos(kx, ky);
+      const ty = topY(map.rows[ky][kx]);
+      const ring = new THREE.Mesh(GEO.ring, new THREE.MeshBasicMaterial({ color: new THREE.Color(civ.color), side: THREE.DoubleSide }));
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.set(wx, ty + 0.6, wz);
+      dynamicGroup.add(ring);
+      if (!civ.alive) continue;
+      const b = makeBuilding(civ);
+      b.position.set(wx, ty, wz);
+      dynamicGroup.add(b);
+      if (civ.capitalMaxHp && civ.capitalHp < civ.capitalMaxHp) {
+        const ratio = Math.max(0, civ.capitalHp / civ.capitalMaxHp);
+        const bg = new THREE.Mesh(new THREE.BoxGeometry(HEX * 1.6, 1.2, 1.2), mat(0x000000));
+        bg.position.set(wx, ty + 30, wz);
+        const fg = new THREE.Mesh(new THREE.BoxGeometry(HEX * 1.6 * ratio, 1.4, 1.4), mat(ratio > 0.4 ? 0x4ade80 : 0xf87171));
+        fg.position.set(wx - HEX * 0.8 * (1 - ratio), ty + 30, wz);
+        dynamicGroup.add(bg, fg);
       }
     }
 
-    // 내 유닛 이동 경로
+    // 내 유닛 경로 (점선)
     if (state.you != null) {
       for (const [unitId, path] of state.myOrders) {
         const u = state.units.get(unitId);
         if (!u || !path.length) continue;
         const me = state.civs.get(state.you);
-        const topOf = (tx2, ty2) => {
-          const [ax, ay] = hexCenter(tx2, ty2);
-          return [ax, ay - elevOf(map.rows[ty2][tx2])];
-        };
-        ctx.beginPath();
-        let [px, py] = topOf(u.x, u.y);
-        ctx.moveTo(px, py);
-        for (const [hx, hy] of path) {
-          [px, py] = topOf(hx, hy);
-          ctx.lineTo(px, py);
-        }
-        ctx.strokeStyle = me.color;
-        ctx.lineWidth = 2;
-        ctx.setLineDash([4, 4]);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        const [tx, ty] = path[path.length - 1];
-        const [tcx, tcy] = topOf(tx, ty);
-        drawHex(tcx, tcy, HEX * 0.55, null, me.color, 2);
+        const pts = [[u.x, u.y], ...path].map(([hx, hy]) => {
+          const [wx, wz] = worldPos(hx, hy);
+          return new THREE.Vector3(wx, topY(map.rows[hy][hx]) + 1.5, wz);
+        });
+        const geo = new THREE.BufferGeometry().setFromPoints(pts);
+        const line = new THREE.Line(geo, new THREE.LineDashedMaterial({ color: new THREE.Color(me.color), dashSize: 4, gapSize: 3 }));
+        line.computeLineDistances();
+        dynamicGroup.add(line);
       }
     }
 
-    // 유닛
+    // 유닛 스택
     const byHex = new Map();
     for (const u of state.units.values()) {
       const k = u.x + ',' + u.y;
       if (!byHex.has(k)) byHex.set(k, []);
       byHex.get(k).push(u);
     }
-    const sortedHexKeys = [...byHex.keys()].sort(
-      (a, b) => Number(a.split(',')[1]) - Number(b.split(',')[1]));
-    for (const k of sortedHexKeys) {
-      const units = byHex.get(k);
-      if (fxHexes.has(k)) continue; // 전투 연출 중
+    for (const [k, units] of byHex) {
+      if (fxHexes.has(k)) continue;
       const [x, y] = k.split(',').map(Number);
       if (!isVis(x, y)) continue;
-      const [cx, cyRaw] = hexCenter(x, y);
-      const cy = cyRaw - elevOf(map.rows[y][x]); // 지형 위에 서기
-      if (!inView(cx, cyRaw)) continue;
+      const [wx, wz] = worldPos(x, y);
+      const ty = topY(map.rows[y][x]);
       const byCiv = new Map();
       for (const u of units) {
         if (!byCiv.has(u.civ)) byCiv.set(u.civ, []);
         byCiv.get(u.civ).push(u);
       }
-      const n = byCiv.size;
       let gi = 0;
+      const n = byCiv.size;
       for (const [civId, group] of byCiv) {
         const civ = state.civs.get(civId);
         if (!civ) { gi++; continue; }
-        const gx = cx + (gi - (n - 1) / 2) * HEX * 0.6;
+        const gx = wx + (gi - (n - 1) / 2) * HEX * 0.75;
+        const fig = makeFigure(civ.color, (civ.tech && civ.tech.military) || 0);
+        fig.position.set(gx, ty, wz);
         const allStunned = group.every(u => u.stunned > 0);
-        // 그림자
-        ctx.globalAlpha = (allStunned ? 0.5 : 1) * 0.3;
-        ctx.beginPath();
-        ctx.ellipse(gx, cy + HEX * 0.48, HEX * 0.34, HEX * 0.12, 0, 0, Math.PI * 2);
-        ctx.fillStyle = '#000';
-        ctx.fill();
-        ctx.globalAlpha = allStunned ? 0.5 : 1;
-        const mil = (civ.tech && civ.tech.military) || 0;
-        drawUnitFigure(gx, cy, HEX * 0.5, civ.color, mil);
-        // 유닛 수 배지 (2기 이상)
-        if (group.length > 1) {
-          const bx = gx + HEX * 0.42, by = cy + HEX * 0.42;
-          ctx.beginPath();
-          ctx.arc(bx, by, HEX * 0.24, 0, Math.PI * 2);
-          ctx.fillStyle = '#0b1220';
-          ctx.fill();
-          ctx.strokeStyle = civ.color;
-          ctx.lineWidth = 1.2;
-          ctx.stroke();
-          ctx.fillStyle = '#e2e8f0';
-          ctx.font = `bold ${HEX * 0.32}px sans-serif`;
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.fillText(String(group.length), bx, by + 0.5);
-        }
-        if (z > 1.4) {
-          ctx.fillStyle = '#e2e8f0';
-          ctx.font = `bold ${HEX * 0.4}px sans-serif`;
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.fillText(civ.code, gx, cy - HEX * 1.05);
-        }
-        ctx.globalAlpha = 1;
+        if (allStunned) fig.traverse(o => { if (o.material) { o.material = o.material.clone(); o.material.transparent = true; o.material.opacity = 0.45; } });
+        dynamicGroup.add(fig);
+        const code = textSprite(civ.code + (group.length > 1 ? ' ×' + group.length : ''), '#e2e8f0', 5);
+        code.position.set(gx, ty + 14, wz);
+        dynamicGroup.add(code);
         gi++;
       }
     }
+  }
 
-    // 선택 유닛 하이라이트
-    if (state.selected != null) {
-      const u = state.units.get(state.selected);
-      if (u) {
-        const [cx, cyRaw] = hexCenter(u.x, u.y);
-        const cy = cyRaw - elevOf(map.rows[u.y] ? map.rows[u.y][u.x] : '~');
-        ctx.beginPath();
-        ctx.ellipse(cx, cy + HEX * 0.02, HEX * 0.68, HEX * 0.8, 0, 0, Math.PI * 2);
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 2;
-        ctx.stroke();
+  // ── 전투 연출
+  const FX_MS = 3000;
+  let battleFx = [];
+  const fxHexes = new Set();
+  function addBattleFx(fx) {
+    fx.start = Date.now();
+    fx.built = null;
+    battleFx.push(fx);
+    fxHexes.add(fx.hex[0] + ',' + fx.hex[1]);
+    fxDirty = true;
+  }
+
+  function buildFx(fx, state) {
+    const g = new THREE.Group();
+    const info = (id) => {
+      const c = state.civs.get(id);
+      return { color: c ? c.color : '#94a3b8', mil: (c && c.tech && c.tech.military) || 0 };
+    };
+    const L = info(fx.winners[0]);
+    const R = info(fx.draw ? (fx.winners[1] != null ? fx.winners[1] : fx.winners[0]) : fx.losers[0]);
+    fx.figL = makeFigure(L.color, L.mil);
+    fx.figR = makeFigure(R.color, R.mil);
+    fx.figR.rotation.y = Math.PI;
+    g.add(fx.figL, fx.figR);
+    fx.spark = textSprite('✦', '#ffe066', 10);
+    fx.spark.visible = false;
+    g.add(fx.spark);
+    const [wx, wz] = worldPos(fx.hex[0], fx.hex[1]);
+    const map = state.map;
+    g.position.set(wx, topY(map.rows[fx.hex[1]][fx.hex[0]]), wz);
+    fxGroup.add(g);
+    fx.built = g;
+  }
+
+  function animateFx(state, vision) {
+    const now = Date.now();
+    let removed = false;
+    battleFx = battleFx.filter(fx => {
+      if (now - fx.start >= FX_MS) {
+        if (fx.built) fxGroup.remove(fx.built);
+        fxHexes.delete(fx.hex[0] + ',' + fx.hex[1]);
+        removed = true;
+        return false;
+      }
+      return true;
+    });
+    if (removed) fxDirty = true;
+    for (const fx of battleFx) {
+      const visible = !vision || vision.has(fx.hex[0] + ',' + fx.hex[1]);
+      if (!fx.built) buildFx(fx, state);
+      fx.built.visible = visible;
+      if (!visible) continue;
+      const t = (now - fx.start) / 1000;
+      if (t < 1.6) { // 격돌
+        const bounce = Math.abs(Math.sin(t * 7));
+        const gap = HEX * (0.25 + 0.55 * bounce);
+        fx.figL.position.set(-gap, 0, 0);
+        fx.figR.position.set(gap, 0, 0);
+        fx.figL.rotation.z = 0;
+        fx.figR.rotation.z = 0;
+        fx.spark.visible = bounce < 0.4;
+        fx.spark.position.set(0, 8, 0);
+        if (!fx.label) { /* 결과 전 */ }
+      } else { // 결과
+        fx.spark.visible = false;
+        if (fx.draw) {
+          fx.figL.position.set(-HEX * 0.5, 0, 0);
+          fx.figR.position.set(HEX * 0.5, 0, 0);
+          fx.figL.rotation.z = 0.35;
+          fx.figR.rotation.z = -0.35;
+          if (!fx.label) {
+            fx.label = textSprite('무승부', '#cbd5e1', 7);
+            fx.label.position.set(0, 22, 0);
+            fx.built.add(fx.label);
+          }
+        } else {
+          fx.figL.position.set(-HEX * 0.35, Math.abs(Math.sin(t * 6)) * 1.2, 0);
+          fx.figR.position.set(HEX * 0.55, 1, 0);
+          fx.figR.rotation.z = Math.PI / 2 * 0.9;
+          if (!fx.label) {
+            const c = state.civs.get(fx.winners[0]);
+            fx.label = textSprite('승리!', c ? c.color : '#fff', 7);
+            fx.label.position.set(-HEX * 0.35, 22, 0);
+            fx.built.add(fx.label);
+            const lose = textSprite('패배', '#94a3b8', 5);
+            lose.position.set(HEX * 0.55, 12, 0);
+            fx.built.add(lose);
+          }
+        }
       }
     }
+  }
 
-    // 전투 연출
-    for (const fx of battleFx) drawBattleFx(fx, nowMs, isVis, state);
+  // ── 카메라
+  function updateCamera() {
+    const w = window.innerWidth, h = window.innerHeight;
+    const tx = (cam.x + w / 2) / cam.zoom;
+    const tz = (cam.y + h / 2) / cam.zoom;
+    const D = 620 / cam.zoom;
+    camera.position.set(tx, D * 0.86, tz + D * 0.55);
+    camera.lookAt(tx, 0, tz);
+  }
+
+  // ── 피킹 (레이캐스트 → 평면 → 헥스)
+  const raycaster = new THREE.Raycaster();
+  const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  const hitPoint = new THREE.Vector3();
+  function hexAt(screenX, screenY, map) {
+    raycaster.setFromCamera(
+      { x: (screenX / window.innerWidth) * 2 - 1, y: -(screenY / window.innerHeight) * 2 + 1 }, camera);
+    if (!raycaster.ray.intersectPlane(groundPlane, hitPoint)) return null;
+    const wx = hitPoint.x, wz = hitPoint.z;
+    const yGuess = Math.round((wz - HEX) / (1.5 * HEX));
+    let best = null, bestD = Infinity;
+    for (let y = yGuess - 1; y <= yGuess + 1; y++) {
+      if (y < 0 || y >= map.h) continue;
+      const xGuess = Math.round((wx - HEX) / (SQRT3 * HEX) - 0.5 * (y & 1));
+      for (let x = xGuess - 1; x <= xGuess + 1; x++) {
+        if (x < 0 || x >= map.w) continue;
+        const [cx2, cz2] = worldPos(x, y);
+        const d = (cx2 - wx) ** 2 + (cz2 - wz) ** 2;
+        if (d < bestD) { bestD = d; best = [x, y]; }
+      }
+    }
+    return bestD <= (HEX * 1.2) ** 2 ? best : null;
   }
 
   function centerOn(hexX, hexY) {
-    const [cx, cy] = hexCenter(hexX, hexY);
     cam.zoom = 2.2;
-    cam.x = cx * cam.zoom - window.innerWidth / 2;
-    cam.y = cy * cam.zoom - window.innerHeight / 2;
+    const [wx, wz] = worldPos(hexX, hexY);
+    cam.x = wx * cam.zoom - window.innerWidth / 2;
+    cam.y = wz * cam.zoom - window.innerHeight / 2;
+  }
+
+  // ── 메인 렌더 루프 (main.js가 매 프레임 호출)
+  function draw(state) {
+    if (!state.map) return;
+    if (!inited) initStatic(state.map);
+
+    // 시야 캐시 (200ms)
+    const now = Date.now();
+    if (now - visionAt > 200) {
+      visionCache = computeVision(state);
+      visionAt = now;
+    }
+
+    const sig = stateSig(state, visionCache);
+    if (sig !== lastSig || fxDirty) {
+      lastSig = sig;
+      fxDirty = false;
+      rebuild(state, visionCache);
+    }
+
+    // 선택 링
+    if (state.selected != null) {
+      const u = state.units.get(state.selected);
+      if (u) {
+        const [wx, wz] = worldPos(u.x, u.y);
+        selRing.position.set(wx, topY(state.map.rows[u.y][u.x]) + 0.8, wz);
+        const p = 1 + Math.sin(now / 180) * 0.06;
+        selRing.scale.set(p, p, 1);
+        selRing.visible = true;
+      } else selRing.visible = false;
+    } else selRing.visible = false;
+
+    animateFx(state, visionCache);
+    updateCamera();
+    renderer.render(scene, camera);
   }
 
   return { canvas, cam, HEX, draw, centerOn, hexCenter, hexAt, addBattleFx };

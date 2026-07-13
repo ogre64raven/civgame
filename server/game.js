@@ -796,7 +796,7 @@ class Game {
       name: country.ko,
       en: country.en,
       player: String(playerName || '').slice(0, 20) || '플레이어',
-      color: `hsl(${(id * 137) % 360} 70% 55%)`,
+      color: `hsl(${(id * 137) % 360}, 70%, 55%)`,
       capital: spawn,
       connected: true,
       resources: { meat: 0, grain: 0, wood: 0, iron: 0 },
