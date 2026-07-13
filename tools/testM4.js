@@ -1,4 +1,5 @@
 // v2 검증: 연구(4계통)·동맹·연합 전투·흡수(점수=기술+영토)·승리 조건
+process.env.NEUTRAL_COUNT = '0'; // 기본 테스트는 중립 유닛 제외 (전용 테스트에서 수동 배치)
 const { World } = require('../server/world');
 const { Game } = require('../server/game');
 
@@ -337,6 +338,56 @@ const unitsOf = (g, id) => [...g.units.values()].filter(u => u.civ === id);
   check(game.hasContact(a.id, b.id), '유닛 근접(2헥스) → 접촉 기록');
   check(game.proposeAlly(a.id, b.id).ok === true, '접촉 후 동맹 제안 가능');
   check(game.contactsOf(a.id).includes(b.id), 'contactsOf 조회');
+}
+
+// ── 15. 중립 유닛: 배치·배회·영토 해제
+{
+  const { game, civs } = newGame(2);
+  const [A] = civs;
+  game.resolveExecution(); // 1턴 진행 (_captures 준비)
+  game.placeNeutrals(4);
+  check(game.neutrals.size === 4, '중립 유닛 4개 배치');
+  check([...game.neutrals.values()].every(n => game.world.isLand(n.x, n.y)), '전부 육지에 배치');
+  game.neutrals.clear();
+
+  const spot = isolated[40];
+  const wolf = game.spawnNeutralAt('wolf', spot[0], spot[1]);
+  const nbs = game.world.neighbors(spot[0], spot[1]).filter(([x, y]) => game.world.isLand(x, y));
+  for (const [x, y] of nbs) game.setTile(x + ',' + y, A.id);
+  const before = game.tileCountOf(A.id);
+  const r = game.resolveExecution();
+  const moved = wolf.x !== spot[0] || wolf.y !== spot[1];
+  check(moved && game.tileCountOf(A.id) === before - 1, '늑대 배회 → 영토 1타일 해제');
+  check(r.neutralEvents.some(e => e.type === 'raid' && e.civId === A.id), '침범(raid) 이벤트');
+  check(r.captures.some(([, , cid]) => cid === null), '해제가 점령 diff(null)로 브로드캐스트');
+  game.neutrals.clear();
+}
+
+// ── 16. 중립 교전: 강함 = 초기 유닛과 동일 (성장 없음)
+{
+  const { game, civs } = newGame(2);
+  const [A] = civs;
+  // 1타일 섬 → 중립 유닛이 이동할 곳이 없어 결정적 교전
+  const isle = [...game.world.componentSizes()].find(([, v]) => v === 1)[0].split(',').map(Number);
+  const bear = game.spawnNeutralAt('bear', isle[0], isle[1]);
+  const ua = unitsOf(game, A.id)[0];
+  [ua.x, ua.y] = isle;
+  let r = game.resolveExecution();
+  check(ua.stunned === 2 && bear.stunned === 2, '군사 Lv0 vs 곰 → 동률, 양측 2턴 행동불능');
+  check(r.neutralEvents.some(e => e.type === 'clash'), '교전(clash) 이벤트');
+
+  ua.stunned = 0; bear.stunned = 0;
+  game.civs.get(A.id).tech.military = 1;
+  r = game.resolveExecution();
+  check(!game.neutrals.has(bear.id), '군사 Lv1 우위 → 곰 처치');
+  check(r.neutralEvents.some(e => e.type === 'kill' && e.civId === A.id), '처치(kill) 이벤트');
+
+  game.civs.get(A.id).tech.military = 0;
+  const lion = game.spawnNeutralAt('lion', isle[0], isle[1]);
+  const us = unitsOf(game, A.id);
+  for (const u of [us[0], us[1]]) { [u.x, u.y] = isle; u.stunned = 0; }
+  game.resolveExecution();
+  check(!game.neutrals.has(lion.id), '2기 수 우위 → 사자 처치');
 }
 
 console.log(fail === 0 ? '\n모든 테스트 통과' : `\n실패 ${fail}건`);

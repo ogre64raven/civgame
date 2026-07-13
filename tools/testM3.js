@@ -1,4 +1,5 @@
 // v2 검증: 영토화 이동·영토 채취·전투(후퇴/방어)·수도 함락 점령·유닛 불변
+process.env.NEUTRAL_COUNT = '0'; // 기본 테스트는 중립 유닛 제외 (전용 테스트에서 수동 배치)
 const { World } = require('../server/world');
 const { Game, START_UNITS } = require('../server/game');
 

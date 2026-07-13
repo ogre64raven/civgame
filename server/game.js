@@ -62,6 +62,8 @@ class Game {
     this.absorbCounters = new Map();
     this.contacts = new Set();          // 접촉한 문명 쌍 'a:b' (영구)
     this.treasures = new Map();         // 'x,y' -> { kind: 'res'|'tech' }
+    this.neutrals = new Map();          // id -> { id, kind, x, y, stunned } (야생동물·원시 부족)
+    this.nextNeutralId = 1;
     this.pendingTechChoices = new Map(); // civId -> 남은 기술 선택 횟수
     this.ended = false;
     this.pool = shuffle(eligibleCountryIndices(world));
@@ -81,6 +83,7 @@ class Game {
     if (this.civs.size < 1) return { ok: false, reason: 'noplayers' };
     for (const civ of this.civs.values()) this.enterWorld(civ);
     this.placeTreasures();
+    this.placeNeutrals();
     this.state = 'RUNNING';
     this.phase = 'MEETING';
     this.armTimer();
@@ -209,6 +212,125 @@ class Game {
     }
   }
 
+  // ── 중립 유닛 (야생동물·원시 부족): 강함은 항상 초기 문명 유닛과 동일(군사 0), 성장 없음
+  placeNeutrals(count) {
+    this.neutrals.clear();
+    if (count == null) {
+      count = process.env.NEUTRAL_COUNT != null
+        ? parseInt(process.env.NEUTRAL_COUNT, 10) : this.civs.size;
+    }
+    if (!count || count < 1) return;
+    // 모든 수도로부터의 BFS 거리
+    const dist = new Map();
+    let frontier = [];
+    for (const c of this.civs.values()) {
+      const k = c.capital[0] + ',' + c.capital[1];
+      if (!dist.has(k)) { dist.set(k, 0); frontier.push(c.capital); }
+    }
+    while (frontier.length) {
+      const next = [];
+      for (const [cx, cy] of frontier) {
+        const d = dist.get(cx + ',' + cy);
+        for (const [nx, ny] of this.world.neighbors(cx, cy)) {
+          const k = nx + ',' + ny;
+          if (!dist.has(k)) { dist.set(k, d + 1); next.push([nx, ny]); }
+        }
+      }
+      frontier = next;
+    }
+    const cands = [];
+    for (let y = 0; y < this.world.h; y++) {
+      for (let x = 0; x < this.world.w; x++) {
+        if (!this.world.isLand(x, y)) continue;
+        const k = x + ',' + y;
+        if ((dist.get(k) ?? 40) < 6) continue; // 수도 근처 제외
+        if (this.treasures.has(k)) continue;
+        cands.push([x, y]);
+      }
+    }
+    // 무작위 순서로 서로 4칸 이상 떨어지게 선정
+    for (let i = cands.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [cands[i], cands[j]] = [cands[j], cands[i]];
+    }
+    const ANIMALS = ['wolf', 'bear', 'tiger', 'lion'];
+    const placed = [];
+    for (const [x, y] of cands) {
+      if (placed.length >= count) break;
+      const far = placed.every(([px, py]) => {
+        const dx = Math.min(Math.abs(x - px), this.world.w - Math.abs(x - px));
+        return dx + Math.abs(y - py) >= 4;
+      });
+      if (!far) continue;
+      placed.push([x, y]);
+      const id = this.nextNeutralId++;
+      const kind = placed.length % 3 === 0
+        ? 'tribe' : ANIMALS[Math.floor(Math.random() * ANIMALS.length)];
+      this.neutrals.set(id, { id, kind, x, y, stunned: 0 });
+    }
+  }
+
+  neutralsPublic() { return [...this.neutrals.values()]; }
+
+  spawnNeutralAt(kind, x, y) { // 테스트용
+    const id = this.nextNeutralId++;
+    const n = { id, kind, x, y, stunned: 0 };
+    this.neutrals.set(id, n);
+    return n;
+  }
+
+  // 배회(1칸 무작위) → 밟은 영토 해제 → 같은 헥스 문명 유닛과 교전
+  resolveNeutrals(stunnedNow) {
+    const events = [], stuns = [];
+    const stunnedNowN = new Set();
+    for (const n of this.neutrals.values()) {
+      if (n.stunned > 0) { stunnedNowN.add(n.id); n.stunned--; continue; }
+      const opts = this.world.neighbors(n.x, n.y).filter(([x, y]) => {
+        if (!this.world.isLand(x, y)) return false;
+        for (const c of this.civs.values())
+          if (c.alive && c.capital[0] === x && c.capital[1] === y) return false;
+        return true;
+      });
+      if (opts.length) {
+        const [nx, ny] = opts[Math.floor(Math.random() * opts.length)];
+        n.x = nx; n.y = ny;
+        const k = nx + ',' + ny;
+        const owner = this.territory.get(k);
+        if (owner != null) {
+          this.clearTile(k);
+          events.push({ type: 'raid', kind: n.kind, civId: owner, x: nx, y: ny });
+        }
+      }
+    }
+    // 교전: 유닛 측 전투력 = 최고 군사 + 수 우위(2기 이상 +1) + 자기 영토 방어. 중립 = 0 고정.
+    for (const n of [...this.neutrals.values()]) {
+      const here = [...this.units.values()].filter(u => u.x === n.x && u.y === n.y);
+      const active = here.filter(u => !stunnedNow.has(u.id) && u.stunned === 0);
+      if (!active.length) continue; // 행동불능 유닛뿐이면 교전 없음
+      if (stunnedNowN.has(n.id) || n.stunned > 0) { // 행동불능 중립 유닛은 처치됨
+        this.neutrals.delete(n.id);
+        events.push({ type: 'kill', kind: n.kind, civId: active[0].civ, x: n.x, y: n.y });
+        continue;
+      }
+      const mil = Math.max(...active.map(u => (this.civs.get(u.civ)?.tech.military || 0)));
+      const tileOwner = this.territory.get(n.x + ',' + n.y);
+      const defense = (tileOwner != null && active.some(u => u.civ === tileOwner))
+        ? (this.civs.get(tileOwner).tech.defense || 0) : 0;
+      const power = mil + defense + (active.length >= 2 ? 1 : 0);
+      if (power > 0) {
+        this.neutrals.delete(n.id);
+        const best = active.reduce((a, b) =>
+          ((this.civs.get(a.civ)?.tech.military || 0) >= (this.civs.get(b.civ)?.tech.military || 0) ? a : b));
+        events.push({ type: 'kill', kind: n.kind, civId: best.civ, x: n.x, y: n.y });
+      } else { // 동률 → 양측 2턴 행동불능
+        n.stunned = 2;
+        for (const u of active) { u.stunned = 2; stuns.push({ unitId: u.id, turns: 2 }); }
+        events.push({ type: 'clash', kind: n.kind, x: n.x, y: n.y });
+      }
+    }
+    return { events, stuns };
+  }
+
   treasuresPublic() {
     return [...this.treasures.keys()].map(k => k.split(',').map(Number));
   }
@@ -277,6 +399,15 @@ class Game {
     this._captures.set(k, civId);
   }
 
+  // 영토 해제 (중립 유닛 침범)
+  clearTile(k) {
+    const cur = this.territory.get(k);
+    if (cur == null) return;
+    this.territoryByCiv.get(cur)?.delete(k);
+    this.territory.delete(k);
+    this._captures.set(k, null);
+  }
+
   // 유닛이 밟은 헥스 점령 (동맹 영토는 존중)
   claim(x, y, civId) {
     if (!this.world.isLand(x, y)) return;
@@ -338,6 +469,10 @@ class Game {
     // ② 전투 (사망 없음 — 패자는 수도 후퇴 + 2턴 행동불능)
     const { battles, stuns, retreats } = this.resolveBattles(stunnedNow);
     for (const r of retreats) moves.push(r);
+
+    // ②.3 중립 유닛: 배회 → 영토 해제 → 교전
+    const neutralRes = this.resolveNeutrals(stunnedNow);
+    stuns.push(...neutralRes.stuns);
 
     // ②.5 접촉 기록 (동맹 가능 조건)
     this.updateContacts();
@@ -468,6 +603,7 @@ class Game {
       moves, battles, stuns, captures, capitalHits, conquests, delegations: this._delegations,
       gains, births, spawnFails, techUpdates, researchFails, allyLeft, absorptions, gameover,
       treasures: treasureEvents,
+      neutrals: this.neutralsPublic(), neutralEvents: neutralRes.events,
       scores: this.scoresPublic(),
     };
   }
@@ -1044,6 +1180,7 @@ class Game {
       units: [...this.units.values()],
       territory: this.territoryPublic(),
       treasures: this.treasuresPublic(),
+      neutrals: this.neutralsPublic(),
       alliances: this.alliancesPublic(),
       state: this.state,
       phase: this.phase, turn: this.turn, endsAt: this.phaseEnds,

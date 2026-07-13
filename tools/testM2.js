@@ -1,4 +1,5 @@
 // M2 검증: (로비→시작 후) 이동 명령·경로·실행 턴 이동·채취·명령 거부
+process.env.NEUTRAL_COUNT = '0'; // 기본 테스트는 중립 유닛 제외 (전용 테스트에서 수동 배치)
 const { World } = require('../server/world');
 const { startServer, admin, Client } = require('./testUtil');
 

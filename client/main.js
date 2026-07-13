@@ -12,6 +12,7 @@
     proposals: new Set(),
     contacts: new Set(),
     treasures: new Set(),
+    neutrals: [],
     queuedResearch: null,
     you: null,
     gameState: 'LOBBY',
@@ -38,6 +39,7 @@
     notreasure: '선택할 보물 효과가 없습니다',
   };
   const TECH_KO = { military: '군사', defense: '인구', gather: '채집', move: '이동' };
+  const NEUTRAL_KO = { wolf: '늑대', bear: '곰', tiger: '호랑이', lion: '사자', tribe: '원시 부족' };
   const TECH_RES_KO = { military: '철', defense: '곡식', gather: '목재', move: '돌' };
   const TECH_DESC = { military: '전투력 +1', defense: '유닛 상한 +1 · 내 영토 전투 +1', gather: '채취 +20%', move: '이동력 +1/3Lv (기본 3 · 평지1/산2/바다3)' };
   let ws;
@@ -102,6 +104,7 @@
         state.proposals = new Set(msg.proposals || []);
         state.contacts = new Set(msg.contacts || []);
         state.treasures = new Set((msg.treasures || []).map(([tx2, ty2]) => tx2 + ',' + ty2));
+        state.neutrals = msg.neutrals || [];
         if (msg.token) sessionStorage.setItem('civToken', msg.token);
         if (msg.you != null) state.you = msg.you;
         if (msg.resources) state.resources = msg.resources;
@@ -132,6 +135,7 @@
       case 'gameStarted': {
         state.units = new Map((msg.units || []).map(u => [u.id, u]));
         state.treasures = new Set((msg.treasures || []).map(([tx2, ty2]) => tx2 + ',' + ty2));
+        state.neutrals = msg.neutrals || [];
         state.territory = new Map();
         applyTerritory(msg.territory);
         state.phase = msg.phase; state.turn = msg.turn; state.endsAt = msg.endsAt;
@@ -248,6 +252,13 @@
           } else {
             toast(`${civName(ev.by)}이(가) 보물상자를 발견했습니다`);
           }
+        }
+        if (msg.neutrals) state.neutrals = msg.neutrals;
+        for (const ev of msg.neutralEvents || []) {
+          const nm = NEUTRAL_KO[ev.kind] || ev.kind;
+          if (ev.type === 'raid' && ev.civId === state.you) toast(`${nm}이(가) 내 영토를 침범했습니다!`);
+          else if (ev.type === 'kill' && ev.civId === state.you) toast(`${nm}을(를) 물리쳤습니다!`);
+          else if (ev.type === 'clash') toast(`${nm}와(과) 교전 — 양측 행동불능`);
         }
         for (const t of msg.techUpdates || []) {
           const c = state.civs.get(t.civId);

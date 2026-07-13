@@ -1,4 +1,5 @@
 // M6 검증: 로비 대기·관리자 API (인증/시작/설정/강퇴/리셋)·섬나라 배정 제외
+process.env.NEUTRAL_COUNT = '0'; // 기본 테스트는 중립 유닛 제외 (전용 테스트에서 수동 배치)
 const { World } = require('../server/world');
 const { Game, MIN_LANDMASS } = require('../server/game');
 const countries = require('../data/countries.json');

@@ -1,4 +1,5 @@
 // M5 검증: 채팅 라우팅 (전체/동맹/귓속말)
+process.env.NEUTRAL_COUNT = '0'; // 기본 테스트는 중립 유닛 제외 (전용 테스트에서 수동 배치)
 const { startServer, admin, Client, wait } = require('./testUtil');
 
 const PORT = 3200;

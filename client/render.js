@@ -103,6 +103,38 @@ const Render = (() => {
     return sp;
   }
 
+  // ── 야생동물 모형 (네발짐승)
+  const BEAST_COLOR = { wolf: 0x8d99a6, bear: 0x5d3f27, tiger: 0xd97b29, lion: 0xc19a4b };
+  function makeBeast(kind) {
+    const g = new THREE.Group();
+    const c = mat(BEAST_COLOR[kind] || 0x8d99a6);
+    const body = new THREE.Mesh(new THREE.BoxGeometry(6.5, 3.2, 3), c);
+    body.position.y = 3.4;
+    g.add(body);
+    if (kind === 'lion') { // 갈기
+      const mane = new THREE.Mesh(new THREE.SphereGeometry(2.2, 8, 6), mat(0x8a6420));
+      mane.position.set(3.2, 5, 0);
+      g.add(mane);
+    }
+    if (kind === 'tiger') { // 줄무늬
+      for (const dx of [-1.6, 0, 1.6]) {
+        const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.5, 3.3, 3.1), mat(0x3a2a18));
+        stripe.position.set(dx, 3.4, 0);
+        g.add(stripe);
+      }
+    }
+    const head = new THREE.Mesh(new THREE.SphereGeometry(kind === 'bear' ? 1.9 : 1.6, 8, 6), c);
+    head.position.set(3.9, 5.1, 0);
+    g.add(head);
+    const legGeo = new THREE.CylinderGeometry(0.45, 0.45, 2.6, 5);
+    for (const [dx, dz] of [[-2.3, -1], [-2.3, 1], [2.3, -1], [2.3, 1]]) {
+      const leg = new THREE.Mesh(legGeo, c);
+      leg.position.set(dx, 1.3, dz);
+      g.add(leg);
+    }
+    return g;
+  }
+
   // ── 3D 유닛 피규어 (군사 레벨별 장비)
   function makeFigure(colorHex, mil) {
     const g = new THREE.Group();
@@ -397,6 +429,7 @@ const Render = (() => {
   function stateSig(state, vision) {
     let s = state.you + '|' + state.selected + '|' + (vision ? vision.size : -1) + '|' + state.territory.size + '|' + state.gameState + '|' + state.alliances.size + '|' + (state.treasures ? state.treasures.size : 0);
     for (const u of state.units.values()) s += ';' + u.id + ',' + u.x + ',' + u.y + ',' + u.stunned + ',' + (u.controller || 0) + ',' + u.civ;
+    for (const n of state.neutrals || []) s += ';N' + n.id + ',' + n.x + ',' + n.y + ',' + n.stunned;
     for (const c of state.civs.values()) {
       const t = c.tech || {};
       s += ';' + c.id + ',' + (c.alive ? 1 : 0) + ',' + c.capitalHp + ',' + ((t.military || 0) + '' + (t.defense || 0) + (t.gather || 0) + (t.move || 0));
@@ -603,6 +636,21 @@ const Render = (() => {
         cone.position.set(dest.x, dest.y + 12, dest.z);
         dynamicGroup.add(cone);
       }
+    }
+
+    // 중립 유닛 (야생동물·원시 부족)
+    const NEUTRAL_LABEL = { wolf: '늑대', bear: '곰', tiger: '호랑이', lion: '사자', tribe: '부족' };
+    for (const n of state.neutrals || []) {
+      if (!isVis(n.x, n.y)) continue;
+      const [wx, wz] = worldPos(n.x, n.y);
+      const ty = topY(map.rows[n.y][n.x]);
+      const fig = n.kind === 'tribe' ? makeFigure('#a1876b', 0) : makeBeast(n.kind);
+      fig.position.set(wx - HEX * 0.25, ty, wz - HEX * 0.2);
+      if (n.stunned > 0) fig.traverse(o => { if (o.material) { o.material = o.material.clone(); o.material.transparent = true; o.material.opacity = 0.45; } });
+      dynamicGroup.add(fig);
+      const lb = textSprite(NEUTRAL_LABEL[n.kind] || '?', '#fca5a5', 4.5);
+      lb.position.set(wx - HEX * 0.25, ty + 11.5, wz - HEX * 0.2);
+      dynamicGroup.add(lb);
     }
 
     // 유닛 스택

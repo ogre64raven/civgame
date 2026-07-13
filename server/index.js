@@ -44,6 +44,7 @@ function makeGame() {
       delegations: result.delegations, techUpdates: result.techUpdates,
       allyLeft: result.allyLeft, absorptions: result.absorptions, scores: result.scores,
       treasures: result.treasures,
+      neutrals: result.neutrals, neutralEvents: result.neutralEvents,
     });
     for (const c of wss.clients) {
       if (c.readyState !== 1 || c.civId == null) continue;
@@ -101,6 +102,7 @@ function handleAdmin(req, res, url, body) {
       units: [...game.units.values()],
       territory: game.territoryPublic(),
       treasures: game.treasuresPublic(),
+      neutrals: game.neutralsPublic(),
       phase: game.phase, turn: game.turn, endsAt: game.phaseEnds,
     });
     return send(200, { ok: true });
