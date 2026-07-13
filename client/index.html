@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>온라인 문명</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0b1220; font-family: 'Segoe UI', 'Malgun Gothic', sans-serif; color: #e2e8f0; }
+  #map { display: block; width: 100%; height: 100%; cursor: grab; }
+  #map.dragging { cursor: grabbing; }
+
+  .hud { position: absolute; background: rgba(13, 20, 36, .88); border: 1px solid #263450; border-radius: 10px; padding: 10px 14px; }
+  #phaseHud { top: 12px; left: 50%; transform: translateX(-50%); text-align: center; min-width: 220px; }
+  #phaseName { font-size: 15px; font-weight: 700; }
+  #phaseName.meeting { color: #7dd3fc; }
+  #phaseName.execution { color: #fbbf24; }
+  #phaseTimer { font-size: 26px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  #turnLabel { font-size: 12px; color: #94a3b8; }
+
+  #myHud { top: 12px; left: 12px; max-width: 240px; }
+  #myFlag { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+  #myCountry { font-weight: 700; }
+  #myHud .sub { font-size: 12px; color: #94a3b8; margin-top: 4px; }
+  #spawnBtn { display: block; width: 100%; margin-top: 8px; padding: 6px 10px; font-size: 12px; font-weight: 700; color: #0b1220; background: #4ade80; border: 0; border-radius: 6px; cursor: pointer; }
+  #spawnBtn:hover { background: #86efac; }
+  #spawnBtn:disabled { background: #334155; color: #64748b; cursor: default; }
+
+  #techHud h3, #playersHud h3, #chatHud h3 { font-size: 12px; color: #94a3b8; margin-bottom: 6px; font-weight: 600; }
+  #techHud { margin-top: 10px; border-top: 1px solid #263450; padding-top: 8px; }
+  .tech-btn { display: block; width: 100%; margin-top: 4px; padding: 5px 8px; font-size: 11.5px; text-align: left; color: #e2e8f0; background: #1e293b; border: 1px solid #334155; border-radius: 6px; cursor: pointer; }
+  .tech-btn:hover { background: #263450; }
+  .tech-btn:disabled { opacity: .45; cursor: default; }
+  .tech-btn.queued { border-color: #7dd3fc; color: #7dd3fc; }
+
+  #playersHud { top: 12px; right: 12px; width: 240px; max-height: 56vh; overflow-y: auto; }
+  .player-row { display: flex; align-items: center; gap: 6px; font-size: 13px; padding: 2px 0; }
+  .player-row .dot { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+  .player-row .nm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+  .player-row.off { opacity: .45; }
+  .ally-btn { flex: none; font-size: 10.5px; padding: 2px 7px; border-radius: 5px; border: 1px solid #334155; background: #1e293b; color: #e2e8f0; cursor: pointer; }
+  .ally-btn:hover { background: #263450; }
+  .ally-btn.accept { border-color: #4ade80; color: #4ade80; }
+  .ally-btn.leave { border-color: #f87171; color: #f87171; }
+  .tag-ally { flex: none; font-size: 10px; color: #4ade80; border: 1px solid #4ade80; border-radius: 4px; padding: 0 4px; }
+
+  #chatHud { bottom: 52px; right: 12px; width: 300px; padding: 8px 10px; }
+  #chatLog { height: 150px; overflow-y: auto; font-size: 12px; line-height: 1.5; margin-bottom: 6px; }
+  .chat-line .cnm { font-weight: 700; }
+  .chat-line .scope { color: #94a3b8; font-size: 10.5px; margin-right: 3px; }
+  .chat-line.dm { color: #d8b4fe; }
+  .chat-line.ally { color: #86efac; }
+  #chatForm { display: flex; gap: 4px; }
+  #chatTo { flex: none; width: 76px; font-size: 11px; background: #1e293b; color: #e2e8f0; border: 1px solid #334155; border-radius: 6px; padding: 4px; }
+  #chatInput { flex: 1; font-size: 12px; background: #1e293b; color: #e2e8f0; border: 1px solid #334155; border-radius: 6px; padding: 4px 8px; outline: none; }
+  #chatInput:focus { border-color: #38bdf8; }
+
+  #joinOverlay { position: fixed; inset: 0; background: rgba(5, 8, 16, .92); display: flex; align-items: center; justify-content: center; z-index: 10; }
+  #joinBox { text-align: center; background: #0f172a; border: 1px solid #263450; border-radius: 16px; padding: 40px 48px; }
+  #joinBox h1 { font-size: 28px; margin-bottom: 6px; }
+  #joinBox p { color: #94a3b8; font-size: 13px; margin-bottom: 20px; }
+  #nameInput { width: 240px; padding: 10px 12px; font-size: 15px; background: #1e293b; color: #e2e8f0; border: 1px solid #334155; border-radius: 8px; outline: none; }
+  #joinBtn { display: block; width: 100%; margin-top: 12px; padding: 10px; font-size: 15px; font-weight: 700; color: #0b1220; background: #38bdf8; border: 0; border-radius: 8px; cursor: pointer; }
+  #joinBtn:hover { background: #7dd3fc; }
+  #joinMsg { margin-top: 10px; font-size: 12px; color: #f87171; min-height: 16px; }
+
+  #overOverlay { position: fixed; inset: 0; background: rgba(5, 8, 16, .9); display: none; align-items: center; justify-content: center; z-index: 20; }
+  #overBox { text-align: center; background: #0f172a; border: 1px solid #263450; border-radius: 16px; padding: 36px 48px; max-height: 80vh; overflow-y: auto; }
+  #overBox h1 { font-size: 26px; margin-bottom: 8px; }
+  #overReason { color: #94a3b8; font-size: 13px; margin-bottom: 18px; }
+  .score-row { display: flex; justify-content: space-between; gap: 24px; font-size: 14px; padding: 3px 0; }
+  .score-row.winner { color: #fbbf24; font-weight: 700; }
+
+  #resHud { bottom: 12px; left: 12px; font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  #helpHud { bottom: 12px; right: 320px; font-size: 11px; color: #94a3b8; max-width: 320px; }
+
+  #toast { position: absolute; bottom: 58px; left: 50%; transform: translateX(-50%); background: rgba(13,20,36,.92); border: 1px solid #263450; border-radius: 8px; padding: 8px 16px; font-size: 13px; opacity: 0; transition: opacity .3s; pointer-events: none; }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<canvas id="map"></canvas>
+
+<div id="phaseHud" class="hud" style="display:none">
+  <div id="turnLabel">턴 1</div>
+  <div id="phaseName" class="meeting">회의 턴</div>
+  <div id="phaseTimer">30</div>
+</div>
+
+<div id="myHud" class="hud" style="display:none">
+  <div><span id="myFlag"></span><span id="myCountry"></span></div>
+  <div class="sub" id="myInfo"></div>
+  <button id="spawnBtn">유닛 생산 (고기5+곡식5)</button>
+  <div id="techHud">
+    <h3>연구 (실행 턴에 완료)</h3>
+    <button class="tech-btn" data-branch="military"></button>
+    <button class="tech-btn" data-branch="gather"></button>
+    <button class="tech-btn" data-branch="move"></button>
+    <button class="tech-btn" data-branch="growth"></button>
+  </div>
+</div>
+
+<div id="playersHud" class="hud" style="display:none">
+  <h3>참가국 (<span id="playerCount">0</span>/30)</h3>
+  <div id="playerList"></div>
+</div>
+
+<div id="chatHud" class="hud" style="display:none">
+  <div id="chatLog"></div>
+  <form id="chatForm" autocomplete="off">
+    <select id="chatTo"><option value="all">전체</option><option value="ally">동맹</option></select>
+    <input id="chatInput" maxlength="200" placeholder="메시지 (Enter로 전송)">
+  </form>
+</div>
+
+<div id="joinOverlay">
+  <div id="joinBox">
+    <h1>온라인 문명</h1>
+    <p>UN 회원국 중 한 나라가 랜덤으로 배정됩니다</p>
+    <input id="nameInput" maxlength="20" placeholder="플레이어 이름" autofocus>
+    <button id="joinBtn">입장</button>
+    <div id="joinMsg"></div>
+  </div>
+</div>
+
+<div id="overOverlay">
+  <div id="overBox">
+    <h1 id="overTitle">게임 종료</h1>
+    <div id="overReason"></div>
+    <div id="overScores"></div>
+  </div>
+</div>
+
+<div id="resHud" class="hud" style="display:none"></div>
+<div id="helpHud" class="hud" style="display:none">클릭: 유닛 선택 → 목표 클릭: 이동 · B: 생산 · X: 이동 취소 · ESC: 해제 · Enter: 채팅 · 드래그/휠: 화면</div>
+
+<div id="toast"></div>
+
+<script src="render.js"></script>
+<script src="input.js"></script>
+<script src="main.js"></script>
+</body>
+</html>
