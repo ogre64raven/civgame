@@ -152,6 +152,59 @@ const Render = (() => {
     }
   }
 
+  // 계급장 스프라이트 — 병: 작대기 / 부사관: 갈매기 / 위관: 다이아몬드 / 영관: 별
+  const rankTexCache = new Map();
+  function rankSprite(rank) {
+    let tex = rankTexCache.get(rank);
+    if (!tex) {
+      const c = document.createElement('canvas');
+      c.width = 160; c.height = 40;
+      const g = c.getContext('2d');
+      g.fillStyle = '#fbbf24';
+      g.strokeStyle = 'rgba(0,0,0,.85)';
+      g.lineWidth = 2.5;
+      const bar = (cx, cy, w, h) => { g.beginPath(); g.rect(cx - w / 2, cy - h / 2, w, h); g.fill(); g.stroke(); };
+      const chevron = (cx, cy, w, h) => {
+        g.beginPath();
+        g.moveTo(cx - w / 2, cy + h / 2); g.lineTo(cx, cy - h / 2); g.lineTo(cx + w / 2, cy + h / 2);
+        g.lineTo(cx + w / 2 - 8, cy + h / 2); g.lineTo(cx, cy - h / 2 + 9); g.lineTo(cx - w / 2 + 8, cy + h / 2);
+        g.closePath(); g.fill(); g.stroke();
+      };
+      const diamond = (cx, cy, r) => {
+        g.beginPath();
+        g.moveTo(cx, cy - r); g.lineTo(cx + r * 0.7, cy); g.lineTo(cx, cy + r); g.lineTo(cx - r * 0.7, cy);
+        g.closePath(); g.fill(); g.stroke();
+      };
+      const star = (cx, cy, r) => {
+        g.beginPath();
+        for (let i = 0; i < 10; i++) {
+          const a = -Math.PI / 2 + i * Math.PI / 5;
+          const rr = i % 2 === 0 ? r : r * 0.45;
+          const px2 = cx + Math.cos(a) * rr, py2 = cy + Math.sin(a) * rr;
+          if (i === 0) g.moveTo(px2, py2); else g.lineTo(px2, py2);
+        }
+        g.closePath(); g.fill(); g.stroke();
+      };
+      if (rank <= 3) { // 이등병 1 ~ 병장 4 작대기
+        for (let i = 0; i <= rank; i++) bar(80, 33 - i * 9, 44, 6);
+      } else if (rank <= 6) { // 하사~상사 갈매기 1~3
+        for (let i = 0; i < rank - 3; i++) chevron(80, 29 - i * 10, 36, 14);
+      } else if (rank <= 9) { // 소위~대위 다이아몬드 1~3
+        const n = rank - 6;
+        for (let i = 0; i < n; i++) diamond(80 + (i - (n - 1) / 2) * 26, 20, 13);
+      } else { // 소령~대령 별 1~3
+        const n = rank - 9;
+        for (let i = 0; i < n; i++) star(80 + (i - (n - 1) / 2) * 30, 20, 14);
+      }
+      tex = new THREE.CanvasTexture(c);
+      rankTexCache.set(rank, tex);
+    }
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false }));
+    sp.renderOrder = 998;
+    sp.scale.set(6.8, 1.7, 1);
+    return sp;
+  }
+
   // ── 야생동물 모형 (네발짐승)
   const BEAST_COLOR = { wolf: 0x8d99a6, bear: 0x5d3f27, tiger: 0xd97b29, lion: 0xc19a4b };
   function makeBeast(kind) {
@@ -526,7 +579,7 @@ const Render = (() => {
 
   function stateSig(state, vision) {
     let s = state.you + '|' + state.selected + '|' + (vision ? vision.size : -1) + '|' + state.territory.size + '|' + state.gameState + '|' + state.alliances.size + '|' + (state.treasures ? state.treasures.size : 0);
-    for (const u of state.units.values()) s += ';' + u.id + ',' + u.x + ',' + u.y + ',' + u.stunned + ',' + (u.controller || 0) + ',' + u.civ;
+    for (const u of state.units.values()) s += ';' + u.id + ',' + u.x + ',' + u.y + ',' + u.stunned + ',' + (u.controller || 0) + ',' + u.civ + ',' + (u.rank || 0);
     for (const n of state.neutrals || []) s += ';N' + n.id + ',' + n.x + ',' + n.y + ',' + n.stunned;
     if (state.unitAnims) for (const uid of state.unitAnims.keys()) s += ';A' + uid;
     for (const f of state.forts || []) s += ';F' + f.x + ',' + f.y + ',' + f.civ + ',' + f.hp;
@@ -854,12 +907,14 @@ const Render = (() => {
       if (!civ) continue;
       const fig = makeUnitFigure(civ.color, (civ.tech && civ.tech.military) || 0);
       const pin = pinSprite(civ.color);
+      const insig = rankSprite(u.rank || 0);
       const code = textSprite(civ.code, '#e2e8f0', 5);
-      dynamicGroup.add(fig, pin, code);
+      dynamicGroup.add(fig, pin, insig, code);
       const [px, py, pz] = animWorldPos(map, anim.steps, 0);
       fig.position.set(px, py, pz);
-      pin.position.set(px, py + 10.5, pz);
-      code.position.set(px, py + 14, pz);
+      pin.position.set(px, py + 10.2, pz);
+      insig.position.set(px, py + 12.2, pz);
+      code.position.set(px, py + 14.6, pz);
       // 걷기 클립이 있으면 재생 (GLB)
       let mixer = null;
       const clips = fig.userData.clips || [];
@@ -868,7 +923,7 @@ const Render = (() => {
         mixer = new THREE.AnimationMixer(fig.userData.animRoot || fig);
         mixer.clipAction(walk).play();
       }
-      animMeshes.set(uid, { fig, pin, code, mixer });
+      animMeshes.set(uid, { fig, pin, insig, code, mixer });
     }
 
     // 유닛 스택
@@ -909,10 +964,14 @@ const Render = (() => {
         if (allStunned) fig.traverse(o => { if (o.material) { o.material = o.material.clone(); o.material.transparent = true; o.material.opacity = 0.45; } });
         dynamicGroup.add(fig);
         const pin = pinSprite(civ.color);
-        pin.position.set(gx, ty + 10.5, wzU);
+        pin.position.set(gx, ty + 10.2, wzU);
         dynamicGroup.add(pin);
+        const maxRank = Math.max(...group.map(u2 => u2.rank || 0));
+        const insig = rankSprite(maxRank);
+        insig.position.set(gx, ty + 12.2, wzU);
+        dynamicGroup.add(insig);
         const code = textSprite(civ.code + (group.length > 1 ? ' ×' + group.length : ''), '#e2e8f0', 5);
-        code.position.set(gx, ty + 14, wzU);
+        code.position.set(gx, ty + 14.6, wzU);
         dynamicGroup.add(code);
         gi++;
       }
@@ -1129,8 +1188,9 @@ const Render = (() => {
         const [px, py, pz] = animWorldPos(state.map, anim.steps, f);
         const bob = m.mixer ? 0 : Math.abs(Math.sin(now / 130)) * 0.9; // 걷는 들썩임(GLB는 자체 애니)
         m.fig.position.set(px, py + bob, pz);
-        m.pin.position.set(px, py + 10.5, pz);
-        m.code.position.set(px, py + 14, pz);
+        m.pin.position.set(px, py + 10.2, pz);
+        m.insig.position.set(px, py + 12.2, pz);
+        m.code.position.set(px, py + 14.6, pz);
       }
     }
 
