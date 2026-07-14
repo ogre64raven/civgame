@@ -18,7 +18,7 @@ const check = (cond, label) => {
   const sizes = world.componentSizes();
   const g = new Game(world, () => {});
   const eligible = new Set(g.pool.map(i => countries[i].code));
-  check(!eligible.has('TV') && !eligible.has('NR') && !eligible.has('FJ'), '태평양 도서국 배정 제외');
+  check(!eligible.has('TUV') && !eligible.has('NRU') && !eligible.has('FJI'), '태평양 도서국 배정 제외');
   check(g.pool.length >= 30, `배정 가능 국가 30개국 이상 (${g.pool.length})`);
   let bad = 0;
   for (const i of g.pool) {
@@ -27,6 +27,33 @@ const check = (cond, label) => {
     if (!nl || (sizes.get(nl[0] + ',' + nl[1]) || 0) < MIN_LANDMASS) bad++;
   }
   check(bad === 0, `배정 풀 전체가 ${MIN_LANDMASS}헥스 이상 대륙 (위반 ${bad})`);
+}
+
+// ── 0.3 신규 플레이어는 기존과 최원거리 배정 (오프라인)
+{
+  const world3 = new World();
+  const g = new Game(world3, () => {});
+  const a = g.join(undefined, 'A').civ;
+  const expected = Math.max(...g.pool.map(i => {
+    const [sx, sy] = g.spawnOf(i);
+    return world3.hexDistance(sx, sy, a.capital[0], a.capital[1]);
+  }));
+  const b = g.join(undefined, 'B').civ;
+  const dAB = world3.hexDistance(a.capital[0], a.capital[1], b.capital[0], b.capital[1]);
+  check(dAB === expected, `2번째 배정 = 최원거리 (${dAB}헥스)`);
+
+  const expected3 = Math.max(...g.pool.map(i => {
+    const [sx, sy] = g.spawnOf(i);
+    return Math.min(
+      world3.hexDistance(sx, sy, a.capital[0], a.capital[1]),
+      world3.hexDistance(sx, sy, b.capital[0], b.capital[1]));
+  }));
+  const c = g.join(undefined, 'C').civ;
+  const dC = Math.min(
+    world3.hexDistance(c.capital[0], c.capital[1], a.capital[0], a.capital[1]),
+    world3.hexDistance(c.capital[0], c.capital[1], b.capital[0], b.capital[1]));
+  check(dC === expected3, `3번째 배정 = 두 수도와의 최소거리 최대화 (${dC}헥스)`);
+  check(dC >= 8, `충분한 이격 (${dC} ≥ 8)`);
 }
 
 // ── 0.5 봇 AI (오프라인)
@@ -46,6 +73,49 @@ const check = (cond, label) => {
   check(g.ordersOf(bot.id).length >= 1, '봇 자동 이동 명령');
   g.resolveExecution();
   check(g.tileCountOf(bot.id) >= 1, `봇 영토 활동 (${g.tileCountOf(bot.id)}타일)`);
+
+  // 회복: 오래 묶인 유닛은 곡식으로 즉시 회복
+  const bu = [...g.units.values()].find(u2 => u2.civ === bot.id);
+  bu.stunned = 4; bu.fatigue = 3;
+  bot.resources.grain = 40;
+  runBots(g);
+  check(bu.stunned === 0 && bu.fatigue === 0, '봇 유닛 회복 (곡식 소모)');
+
+  // 요새: 여유 자원 + 국경 영토 위 유닛 → 예약
+  const bu2 = [...g.units.values()].find(u2 => u2.civ === bot.id && u2.stunned === 0);
+  const nb = g.world.neighbors(bot.capital[0], bot.capital[1]).find(([x, y]) => g.world.isLand(x, y));
+  if (nb) {
+    [bu2.x, bu2.y] = nb;
+    g.setTile(nb[0] + ',' + nb[1], bot.id);
+    g.orders.delete(bu2.id);
+    bot.resources.stone = 30; bot.resources.wood = 30;
+    runBots(g);
+    check(g.fortOrders.get(nb[0] + ',' + nb[1]) === bot.id, '봇 국경 요새 예약');
+  }
+}
+
+// ── 0.6 봇 외교: 제안 수락 + 동의 승인
+{
+  const { runBots } = require('../server/bots');
+  const world5 = new World();
+  const g = new Game(world5, () => {});
+  const h = g.join(undefined, '사람').civ;
+  const b1 = g.addBot().civ, b2 = g.addBot().civ;
+  g.startGame();
+  clearTimeout(g.timer);
+  for (const x of [b1.id, b2.id]) g.contacts.add(Math.min(h.id, x) + ':' + Math.max(h.id, x));
+  g.contacts.add(Math.min(b1.id, b2.id) + ':' + Math.max(b1.id, b2.id));
+  g.proposeAlly(h.id, b1.id);
+  const ev = runBots(g);
+  check(g.isAllied(h.id, b1.id), '봇이 동맹 제안 수락');
+  check(ev.formed.length === 1, '성립 이벤트 반환 (브로드캐스트용)');
+  // 3국 확장: 사람이 b2에 제안 + b2가 수락 → 기존 동맹국 b1... (사람-b1 동맹에서 b2 확장은 b1 동의 필요)
+  g.proposeAlly(h.id, b2.id);
+  const r2 = g.acceptAlly(b2.id, h.id);
+  check(r2.consentNeeded === b1.id, '확장 동의 대기 (봇 b1)');
+  const ev2 = runBots(g);
+  check(g.isAllied(h.id, b2.id), '봇이 동의 요청 승인 → 3국 동맹');
+  check(ev2.formed.length === 1, '동의 성립 이벤트 반환');
 }
 
 (async () => {

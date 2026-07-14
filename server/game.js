@@ -615,9 +615,28 @@ class Game {
     this.spawnOrders.clear();
 
     // ⑥ 외교: 동맹 탈퇴 발효 → 흡수 판정
-    const allyLeft = [];
+    const allyLeft = [], allyFees = [];
     for (const [from, to] of this.leaveOrders) {
       if (this.isAllied(from, to)) {
+        // 위약금: 파기 신청측이 현재 자원의 10% 지급 (3국 동맹이면 다른 동맹국에 5%씩)
+        const fromCiv = this.civs.get(from);
+        if (fromCiv && fromCiv.alive) {
+          const others = [...(this.allies.get(from) || new Set())];
+          const recipients = others.length >= 2 ? others : [to];
+          const pct = others.length >= 2 ? 0.05 : 0.10;
+          const RES4 = ['stone', 'grain', 'wood', 'iron'];
+          const fee = {};
+          for (const r2 of RES4) fee[r2] = Math.floor(fromCiv.resources[r2] * pct);
+          for (const rid of recipients) {
+            const rc = this.civs.get(rid);
+            if (!rc || !rc.alive) continue;
+            for (const r2 of RES4) {
+              fromCiv.resources[r2] -= fee[r2];
+              rc.resources[r2] += fee[r2];
+            }
+            allyFees.push({ from, to: rid, res: { ...fee } });
+          }
+        }
         this.removeAlliance(from, to);
         allyLeft.push([from, to]);
       }
@@ -671,7 +690,7 @@ class Game {
       gains, births, spawnFails, techUpdates, researchFails, allyLeft, absorptions, gameover,
       treasures: treasureEvents,
       neutrals: this.neutralsPublic(), neutralEvents: neutralRes.events,
-      forts: this.fortsPublic(), fortEvents, fortFails,
+      forts: this.fortsPublic(), fortEvents, fortFails, allyFees,
       scores: this.scoresPublic(),
     };
   }
@@ -1221,6 +1240,34 @@ class Game {
     return { ok: true, civ: r.civ };
   }
 
+  // 국가 스폰 지점 (캐시)
+  spawnOf(countryIdx) {
+    if (!this._spawnCache) this._spawnCache = new Map();
+    let sp = this._spawnCache.get(countryIdx);
+    if (!sp) {
+      const c = countries[countryIdx];
+      const [cx, cy] = this.world.lonlatToHex(c.cap[0], c.cap[1]);
+      sp = this.world.nearestLand(cx, cy) || [cx, cy];
+      this._spawnCache.set(countryIdx, sp);
+    }
+    return sp;
+  }
+
+  // 신규 배정: 기존 플레이어 수도들과의 최소 거리가 가장 먼 나라 선택
+  pickCountryIndex() {
+    if (this.civs.size === 0) return this.pool.pop();
+    let bestPos = this.pool.length - 1, bestScore = -1;
+    for (let i = 0; i < this.pool.length; i++) {
+      const [sx, sy] = this.spawnOf(this.pool[i]);
+      let minD = Infinity;
+      for (const c of this.civs.values()) {
+        minD = Math.min(minD, this.world.hexDistance(sx, sy, c.capital[0], c.capital[1]));
+      }
+      if (minD > bestScore) { bestScore = minD; bestPos = i; }
+    }
+    return this.pool.splice(bestPos, 1)[0];
+  }
+
   // ── 접속/재접속
   join(token, playerName) {
     if (token && this.tokens.has(token)) {
@@ -1231,11 +1278,11 @@ class Game {
     if (this.state === 'ENDED') return { spectator: true };
     if (this.civs.size >= MAX_PLAYERS || this.pool.length === 0) return { spectator: true };
 
-    const country = countries[this.pool.pop()];
+    const countryIdx = this.pickCountryIndex();
+    const country = countries[countryIdx];
     const id = this.nextCivId++;
     const newToken = crypto.randomBytes(16).toString('hex');
-    const [cx, cy] = this.world.lonlatToHex(country.cap[0], country.cap[1]);
-    const spawn = this.world.nearestLand(cx, cy) || [cx, cy];
+    const spawn = this.spawnOf(countryIdx);
 
     const civ = {
       id,

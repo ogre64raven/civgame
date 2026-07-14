@@ -34,7 +34,10 @@ function notifyConsent(r) {
 
 function makeGame() {
   const g = new Game(world, broadcast);
-  g.onMeeting = () => runBots(g);
+  g.onMeeting = () => {
+    const ev = runBots(g) || {};
+    for (const pair of ev.formed || []) broadcast({ type: 'allyFormed', pair });
+  };
   g.onExec = (result) => {
     broadcast({
       type: 'exec', turn: g.turn,
@@ -46,6 +49,7 @@ function makeGame() {
       treasures: result.treasures,
       neutrals: result.neutrals, neutralEvents: result.neutralEvents,
       forts: result.forts, fortEvents: result.fortEvents,
+      allyFees: result.allyFees,
     });
     for (const c of wss.clients) {
       if (c.readyState !== 1 || c.civId == null) continue;

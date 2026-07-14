@@ -76,6 +76,19 @@ class World {
   }
 
   // 육지 연결 컴포넌트(대륙/섬)별 크기: 'x,y' -> 크기
+  // odd-r offset 헥스 거리 (동서 랩 고려)
+  hexDistance(ax, ay, bx, by) {
+    const dist = (x1, y1, x2, y2) => {
+      const q1 = x1 - ((y1 - (y1 & 1)) >> 1);
+      const q2 = x2 - ((y2 - (y2 & 1)) >> 1);
+      const dq = q2 - q1, dr = y2 - y1;
+      return (Math.abs(dq) + Math.abs(dr) + Math.abs(dq + dr)) / 2;
+    };
+    let best = Infinity;
+    for (const sx of [-this.w, 0, this.w]) best = Math.min(best, dist(ax, ay, bx + sx, by));
+    return best;
+  }
+
   componentSizes() {
     if (this._compSizes) return this._compSizes;
     const sizes = new Map();

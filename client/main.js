@@ -305,6 +305,12 @@
           state.alliances.delete(pairKey(a, b));
           if (a === state.you || b === state.you) toast(`동맹 해체: ${civName(a)} - ${civName(b)}`);
         }
+        for (const f of msg.allyFees || []) {
+          const amt = Object.values(f.res || {}).reduce((x, y) => x + y, 0);
+          if (amt <= 0) continue;
+          if (f.from === state.you) toast(`파기 위약금 지급 → ${civName(f.to)} (자원 ${amt})`);
+          else if (f.to === state.you) toast(`${civName(f.from)}의 파기 위약금 수령 (자원 ${amt})`);
+        }
         for (const h of msg.capitalHits || []) {
           const c = state.civs.get(h.civId);
           if (c) { c.capitalHp = h.hp; c.capitalMaxHp = h.max; }
@@ -448,7 +454,7 @@
         break;
       }
       case 'allyLeaveAck': {
-        toast('동맹 파기 선언 — 다음 실행 턴에 해체됩니다');
+        toast('동맹 파기 선언 — 다음 실행 턴에 해체, 위약금으로 자원 10% 지급 (3국 동맹은 5%씩)');
         break;
       }
       case 'allyRejected': {

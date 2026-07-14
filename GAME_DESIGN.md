@@ -7,7 +7,7 @@
 | 항목 | 내용 |
 |---|---|
 | 동시접속 | 최대 30명, 단일 월드 |
-| 국가 | UN 회원국 193개국 중 랜덤·중복 없이 배정 (수도가 5타일 미만 소형 섬인 28개국 제외 → 165개국) |
+| 국가 | UN 회원국 193개국 중 중복 없이 배정 (수도가 5타일 미만 소형 섬인 28개국 제외 → 165개국). 첫 플레이어는 랜덤, 이후는 **기존 플레이어 수도들과의 최소 거리가 가장 먼 나라**를 자동 선택 |
 | 국가코드 | ISO 3166-1 alpha-3 (KOR, USA, JPN …) |
 | 맵 | 실제 세계지도 기반 헥스 그리드 135×68 (육지 2,889타일 ≈ 31.5%), 동서 랩어라운드 |
 | 턴 구조 | 회의 턴 30초 → 실행 턴 10초 반복 (관리자가 변경 가능), 기본 120턴 제한 |
@@ -147,7 +147,7 @@ Dockerfile · .github/workflows/deploy.yml
 - **접촉**: 유닛이 상대 유닛·영토·수도의 2헥스 이내로 접근하면 영구 기록. **동맹은 접촉한 문명끼리만 가능**.
 - 동맹 제안 → 수락 시 성립. **그룹 최대 3개국** — 2국 동맹에서 확장하려면 나머지 동맹국의 동의 팝업 승인 필요.
 - 동맹 효과: 전투 불발·시야 공유·수입 배분(§6)·공동 승리.
-- 파기는 선언 후 다음 실행 턴 발효.
+- 파기는 선언 후 다음 실행 턴 발효. **위약금**: 파기 신청측이 발효 시점 자원의 **10%를 상대에게 지급** (3국 동맹이면 자기 동맹국들에게 **5%씩**, 종류별 내림).
 - **흡수**: 동맹 쌍의 점수(기술 합 + 영토 수) 비율이 **8:2 초과 3턴 연속**이면 약자가 강자에게 흡수(예속과 동일).
 
 ## 13. 승리 조건
@@ -165,25 +165,10 @@ Dockerfile · .github/workflows/deploy.yml
 - 입장하면 국가 배정 후 **로비 대기**. 게임 진행 중 새 입장자는 즉시 참전, 정원 초과·종료 후에는 관전자.
 - 재접속: 세션 토큰으로 기존 문명 복귀. 접속이 끊겨도 문명은 유지.
 - **관리자 페이지 `/admin`** (비밀번호: `ADMIN_PASSWORD` 환경변수, 기본 admin1234): 시작·리셋·강퇴·회의/실행 시간·턴 제한 설정·봇 추가/제거·**맵 관전**(안개 없는 전체 맵 실시간 관찰).
-- **봇**: 회의 턴마다 가장 낮은 기술 연구, 여유 자원 시 유닛 생산, 주변 비소유 타일로 확장(보물 우선), 군사 우위일 때만 적 수도 공격.
+- **봇**: 회의 턴마다 가장 낮은 기술 연구, 여유 자원 시 유닛 생산, 오래 묶인 유닛은 곡식으로 회복, 자원이 넉넉하면 국경에 요새 건설, 주변 비소유 타일로 확장(보물 우선, 군사 0이면 중립 유닛 회피, 적 장성 우회), 군사 우위일 때만 적 수도 공격. 동맹 제안은 수락하고 확장 동의 요청은 승인.
 
 ## 16. 네트워크 프로토콜 (WebSocket, JSON)
 
 클라이언트 → 서버: `join` `spectate` `order.move`(웨이포인트 append) `order.stop` `order.spawn` `order.research` `ally.propose/accept/leave/consent` `vassal.delegate` `treasure.choose` `chat`(all/ally/dm)
 
-서버 → 클라이언트: `welcome`(전체 스냅샷) `gameStarted` `phase` `exec`(이동·전투·점령·공성·생산·연구·외교·보물 diff) `resources`(개인) `treasureTechOffer` `allyConsentRequest` `gameover` 등. 관리자 REST: `/api/admin/*` (`x-admin-pass` 헤더).
-
-## 17. 배포
-
-1. GitHub push → Actions가 테스트 후 Docker 이미지 빌드, GHCR push (SSH 배포는 `DEPLOY_ENABLED` 변수로 선택).
-2. 서버 반영:
-
-```bash
-git pull && docker build -t online-civ . && \
-docker rm -f online-civ; docker run -d --name online-civ --restart unless-stopped \
-  -p 3000:3000 -e ADMIN_PASSWORD='admin' online-civ
-```
-
-## 18. 테스트
-
-`node tools/testM2.js` ~ `testM6.js` — 이동/채취, 영토/전투/공성/생산, 연구/동맹/흡수/승리/위임/보물, 채팅, 봇/관리자 API. 환경변수 단축: `PHASE_MEETING_MS` `PHASE_EXEC_MS` `TURN_LIMIT` `ALLY_NO_CONTACT_CHECK=1`(테스트 전용).
+서버 → 클라이언트: `welcome`(전체 스냅샷) `gameStarted` `phase` `exec`(이동·전투·점령·공성·생산·연구·외교·보물 diff) `resources`(개인) `treasureTechOffer` `allyConsentRequest` `gameover` 등. 관리자 REST: `/api/admin/*`

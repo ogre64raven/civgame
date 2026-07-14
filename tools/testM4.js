@@ -340,6 +340,44 @@ const unitsOf = (g, id) => [...g.units.values()].filter(u => u.civ === id);
   check(game.contactsOf(a.id).includes(b.id), 'contactsOf 조회');
 }
 
+// ── 14.5 동맹 파기 위약금: 양자 10%, 3국 동맹은 5%씩
+{
+  const { game, civs } = newGame(2);
+  const [A, B] = civs;
+  game.territory.clear(); game.territoryByCiv.clear(); // 채취 수입 차단
+  game.proposeAlly(A.id, B.id);
+  game.acceptAlly(B.id, A.id);
+  const aCiv = game.civs.get(A.id), bCiv = game.civs.get(B.id);
+  aCiv.resources = { stone: 100, grain: 50, wood: 30, iron: 9 };
+  bCiv.resources = { stone: 0, grain: 0, wood: 0, iron: 0 };
+  game.leaveAlly(A.id, B.id);
+  const r = game.resolveExecution();
+  check(r.allyFees.length === 1 && r.allyFees[0].from === A.id && r.allyFees[0].to === B.id, '위약금 이벤트');
+  check(aCiv.resources.stone === 90 && aCiv.resources.grain === 45 && aCiv.resources.wood === 27 && aCiv.resources.iron === 9,
+    `파기측 10% 차감 (철 9는 내림 0)`);
+  check(bCiv.resources.stone === 10 && bCiv.resources.grain === 5 && bCiv.resources.wood === 3 && bCiv.resources.iron === 0,
+    '상대측 수령');
+}
+{
+  const { game, civs } = newGame(3);
+  const [A, B, C] = civs;
+  game.territory.clear(); game.territoryByCiv.clear();
+  game.proposeAlly(A.id, B.id); game.acceptAlly(B.id, A.id);
+  game.proposeAlly(A.id, C.id);
+  const m = game.proposeAlly(C.id, A.id);
+  if (m.consentNeeded != null) game.consentAlly(B.id, m.pair, true);
+  check(game.isAllied(A.id, B.id) && game.isAllied(A.id, C.id), '3국 동맹 구성 (A-B, A-C)');
+  const aCiv = game.civs.get(A.id), bCiv = game.civs.get(B.id), cCiv = game.civs.get(C.id);
+  aCiv.resources = { stone: 100, grain: 0, wood: 0, iron: 0 };
+  bCiv.resources = { stone: 0, grain: 0, wood: 0, iron: 0 };
+  cCiv.resources = { stone: 0, grain: 0, wood: 0, iron: 0 };
+  game.leaveAlly(A.id, B.id);
+  const r = game.resolveExecution();
+  check(r.allyFees.length === 2, '3국 동맹 → 두 나라에 지급');
+  check(aCiv.resources.stone === 90, '파기측 총 10% 차감 (5%+5%)');
+  check(bCiv.resources.stone === 5 && cCiv.resources.stone === 5, '다른 동맹국에 5%씩');
+}
+
 // ── 15. 중립 유닛: 배치·배회·영토 해제
 {
   const { game, civs } = newGame(2);
