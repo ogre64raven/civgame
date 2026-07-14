@@ -8,6 +8,7 @@ const START_UNITS = 3;                  // 시작 유닛 수
 const SPAWN_COST = 10;                  // 유닛 생산 비용 (고기·곡식 각각)
 const FORT_COST = 10;                   // 요새 건설 비용 (돌·목재 각각)
 const RALLY_COST = 10;                  // 유닛 회복(사기 진작) 비용 (곡식)
+const RANK_MAX = 12;                    // 계급: 0 이등병 ~ 12 대령 (전투 승리마다 +1, 계급당 전투력 +0.5)
 const TECH_MAX = 5;
 const TECH_MAX_MIL = 7;                 // 군사는 근미래(6)·미래(7)까지
 const techMaxOf = (branch) => (branch === 'military' ? TECH_MAX_MIL : TECH_MAX);
@@ -100,7 +101,7 @@ class Game {
   enterWorld(civ) {
     for (let i = 0; i < START_UNITS; i++) {
       const uid = this.nextUnitId++;
-      this.units.set(uid, { id: uid, civ: civ.id, x: civ.capital[0], y: civ.capital[1], stunned: 0 });
+      this.units.set(uid, { id: uid, civ: civ.id, x: civ.capital[0], y: civ.capital[1], stunned: 0, rank: 0 });
     }
     this.setTile(civ.capital[0] + ',' + civ.capital[1], civ.id);
   }
@@ -310,7 +311,7 @@ class Game {
 
   // 배회(1칸 무작위) → 밟은 영토 해제 → 같은 헥스 문명 유닛과 교전
   resolveNeutrals(stunnedNow) {
-    const events = [], stuns = [];
+    const events = [], stuns = [], promotions = [];
     const stunnedNowN = new Set();
     for (const n of this.neutrals.values()) {
       if (n.stunned > 0) { stunnedNowN.add(n.id); n.stunned--; continue; }
@@ -348,19 +349,26 @@ class Game {
       const tileOwner = this.territory.get(n.x + ',' + n.y);
       const defense = (tileOwner != null && active.some(u => u.civ === tileOwner))
         ? (this.civs.get(tileOwner).tech.defense || 0) : 0;
-      const power = mil + defense + (active.length >= 2 ? 1 : 0);
+      const rankBonus = active.reduce((a, u2) => a + 0.5 * (u2.rank || 0), 0);
+      const power = mil + defense + rankBonus + (active.length >= 2 ? 1 : 0);
       if (power > 0) {
         this.neutrals.delete(n.id);
         const best = active.reduce((a, b) =>
           ((this.civs.get(a.civ)?.tech.military || 0) >= (this.civs.get(b.civ)?.tech.military || 0) ? a : b));
         events.push({ type: 'kill', kind: n.kind, civId: best.civ, x: n.x, y: n.y });
+        for (const u2 of active) {
+          if ((u2.rank || 0) < RANK_MAX) {
+            u2.rank = (u2.rank || 0) + 1;
+            promotions.push({ unitId: u2.id, rank: u2.rank });
+          }
+        }
       } else { // 동률 → 양측 2턴 행동불능
         n.stunned = 2;
         for (const u of active) { u.stunned = 2; stuns.push({ unitId: u.id, turns: 2 }); }
         events.push({ type: 'clash', kind: n.kind, x: n.x, y: n.y });
       }
     }
-    return { events, stuns };
+    return { events, stuns, promotions };
   }
 
   treasuresPublic() {
@@ -539,13 +547,14 @@ class Game {
       if (p.order.idx >= p.order.path.length) this.orders.delete(p.u.id);
     }
 
-    // ② 전투 (사망 없음 — 패자는 수도 후퇴 + 2턴 행동불능)
-    const { battles, stuns, retreats } = this.resolveBattles(stunnedNow);
+    // ② 전투 (사망 없음 — 패자는 근처 후퇴 + 행동불능)
+    const { battles, stuns, retreats, promotions } = this.resolveBattles(stunnedNow);
     for (const r of retreats) moves.push(r);
 
     // ②.3 중립 유닛: 배회 → 영토 해제 → 교전
     const neutralRes = this.resolveNeutrals(stunnedNow);
     stuns.push(...neutralRes.stuns);
+    promotions.push(...neutralRes.promotions);
 
     // ②.4 요새 건설 (예약분) — 자원 차감, 적 점유 시 실패
     const fortEvents = [], fortFails = [];
@@ -664,7 +673,7 @@ class Game {
       civ.resources.stone -= SPAWN_COST;
       civ.resources.grain -= SPAWN_COST;
       const uid = this.nextUnitId++;
-      const nu = { id: uid, civ: civId, x: civ.capital[0], y: civ.capital[1], stunned: 0 };
+      const nu = { id: uid, civ: civId, x: civ.capital[0], y: civ.capital[1], stunned: 0, rank: 0 };
       this.units.set(uid, nu);
       births.push(nu);
     }
@@ -745,7 +754,7 @@ class Game {
       moves, battles, stuns, captures, capitalHits, conquests, delegations: this._delegations,
       gains, births, spawnFails, techUpdates, researchFails, allyLeft, absorptions, gameover,
       treasures: treasureEvents,
-      neutrals: this.neutralsPublic(), neutralEvents: neutralRes.events,
+      neutrals: this.neutralsPublic(), neutralEvents: neutralRes.events, promotions,
       forts: this.fortsPublic(), fortEvents, fortFails, allyFees,
       scores: this.scoresPublic(),
     };
@@ -796,7 +805,7 @@ class Game {
   // 연합 전투력 = 최고 군사기술 + 수 우위(2배 이상 +1) + 자기 영토면 소유국 방어기술
   // 최고 단독 → 패자 전원 수도 후퇴 + 2턴 행동불능, 승자 1턴. 동률 → 전원 2턴 행동불능.
   resolveBattles(stunnedNow = new Set()) {
-    const battles = [], stuns = [], retreats = [];
+    const battles = [], stuns = [], retreats = [], promotions = [];
     const byHex = new Map();
     for (const u of this.units.values()) {
       const k = u.x + ',' + u.y;
@@ -837,7 +846,8 @@ class Game {
         const maxOther = Math.max(...entries.filter(o => o !== e).map(o => o.count));
         const defense = (tileOwner != null && e.civIds.includes(tileOwner))
           ? (this.civs.get(tileOwner).tech.defense || 0) : 0;
-        e.power = e.mil + defense + (e.count >= 2 * maxOther ? 1 : 0);
+        const rankBonus = e.units.reduce((a, u2) => a + 0.5 * (u2.rank || 0), 0);
+        e.power = e.mil + defense + rankBonus + (e.count >= 2 * maxOther ? 1 : 0);
       }
       const maxP = Math.max(...entries.map(e => e.power));
       const winners = entries.filter(e => e.power === maxP);
@@ -845,8 +855,16 @@ class Game {
       const stunTurns = winners.length >= 2 ? 2 : 1;
       const [bhx, bhy] = k.split(',').map(Number);
 
+      const promote = winners.length === 1 && losers.length > 0; // 무승부는 진급 없음
       for (const w of winners) {
-        for (const u of w.units) { u.stunned = stunTurns; stuns.push({ unitId: u.id, turns: stunTurns }); }
+        for (const u of w.units) {
+          u.stunned = stunTurns;
+          stuns.push({ unitId: u.id, turns: stunTurns });
+          if (promote && (u.rank || 0) < RANK_MAX) {
+            u.rank = (u.rank || 0) + 1;
+            promotions.push({ unitId: u.id, rank: u.rank });
+          }
+        }
       }
       // 패자: 전투 지점 근처(2헥스, 수도 방향 우선)로 후퇴 + 행동불능
       for (const l of losers) {
@@ -871,7 +889,7 @@ class Game {
         }))),
       });
     }
-    return { battles, stuns, retreats };
+    return { battles, stuns, retreats, promotions };
   }
 
   // 채취 수입 계산. 동맹 그룹은 합산 후 영토 수 비율로 배분(최대 잉여법)

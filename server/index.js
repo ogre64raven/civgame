@@ -50,6 +50,7 @@ function makeGame() {
       neutrals: result.neutrals, neutralEvents: result.neutralEvents,
       forts: result.forts, fortEvents: result.fortEvents,
       allyFees: result.allyFees,
+      promotions: result.promotions,
     });
     for (const c of wss.clients) {
       if (c.readyState !== 1 || c.civId == null) continue;

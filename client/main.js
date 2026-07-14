@@ -46,6 +46,7 @@
   };
   const TECH_KO = { military: '군사', defense: '인구', gather: '채집', move: '이동' };
   const NEUTRAL_KO = { wolf: '늑대', bear: '곰', tiger: '호랑이', lion: '사자', tribe: '원시 부족' };
+  const RANKS = ['이등병', '일병', '상병', '병장', '하사', '중사', '상사', '소위', '중위', '대위', '소령', '중령', '대령'];
   const TECH_RES_KO = { military: '철', defense: '곡식', gather: '목재', move: '돌' };
   const TECH_DESC = { military: '전투력 +1', defense: '유닛 상한 +1 · 내 영토 전투 +1', gather: '채취 +20%', move: '이동력 +1/3Lv (기본 3 · 평지1/산2/바다3)' };
   let ws;
@@ -261,6 +262,11 @@
         for (const s of msg.stuns || []) {
           const u = state.units.get(s.unitId);
           if (u) { u.stunned = s.turns; if (s.fatigue != null) u.fatigue = s.fatigue; }
+        }
+        for (const pr of msg.promotions || []) {
+          const u = state.units.get(pr.unitId);
+          if (u) u.rank = pr.rank;
+          if (u && isMine(u)) toast(`유닛 진급 — ${RANKS[pr.rank] || pr.rank} (전투력 +0.5)`);
         }
         for (const nu of msg.births || []) {
           state.units.set(nu.id, nu);
@@ -828,7 +834,7 @@
     const show = state.gameState === 'RUNNING' && !state.ended && mine.length > 0;
     let sig = state.selected + '|' + show + '|' + state.phase;
     for (const u of mine) {
-      sig += ';' + u.id + ',' + u.x + ',' + u.y + ',' + u.stunned + ',' + (u.fatigue || 0) + ','
+      sig += ';' + u.id + ',' + u.x + ',' + u.y + ',' + u.stunned + ',' + (u.fatigue || 0) + ',' + (u.rank || 0) + ','
         + (state.myOrders.get(u.id)?.length || 0) + ','
         + (state.territory.get(u.x + ',' + u.y) ?? 'n') + ',' + (u.controller || 0);
     }
@@ -852,7 +858,8 @@
         status = `채집 중 (${TER_RES_KO[state.map.rows[u.y][u.x]] || '?'})`; cls = 'st-gather';
       } else { status = '대기'; cls = 'st-idle'; }
       const delegated = u.controller === state.you && u.civ !== state.you;
-      row.innerHTML = `<span class="unm">유닛 ${i}${delegated ? ' <span class="tag-deleg">위임</span>' : ''}</span>`
+      const rankNm = RANKS[u.rank || 0] || '이등병';
+      row.innerHTML = `<span class="unm">유닛 ${i} <span class="rank">${rankNm}</span>${delegated ? ' <span class="tag-deleg">위임</span>' : ''}</span>`
         + `<span class="ust ${cls}">${status}</span>`
         + (state.selected === u.id ? '<span class="tag-sel">선택됨</span>' : '');
       if ((u.stunned > 0 || fat > 0) && u.civ === state.you && state.phase === 'MEETING') {

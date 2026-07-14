@@ -507,5 +507,48 @@ const key = (h) => h[0] + ',' + h[1];
   check(!g3.orders.has(ua3.id), '패자의 남은 경로 취소');
 }
 
+// ── 15. 계급: 승리마다 진급, 계급당 전투력 +0.5
+{
+  const { game, civs } = newGame(2);
+  const [A, B] = civs;
+  game.civs.get(A.id).tech.military = 1; // A 우위
+  const hex = isolated[30];
+  const ua = unitsOf(game, A.id)[0], ub = unitsOf(game, B.id)[0];
+  [ua.x, ua.y] = hex; [ub.x, ub.y] = hex;
+  const r = game.resolveExecution();
+  check(ua.rank === 1, '승리 → 일병 진급');
+  check(r.promotions.some(p2 => p2.unitId === ua.id && p2.rank === 1), '진급 브로드캐스트');
+  check((ub.rank || 0) === 0, '패자는 진급 없음');
+
+  // 계급 전투력: 군사 0 + 계급 2(상병, +1.0) vs 군사 1 → 동률
+  const { game: g2, civs: c2 } = newGame(2);
+  g2.civs.get(c2[1].id).tech.military = 1;
+  const ua2 = unitsOf(g2, c2[0].id)[0], ub2 = unitsOf(g2, c2[1].id)[0];
+  ua2.rank = 2;
+  [ua2.x, ua2.y] = isolated[31]; [ub2.x, ub2.y] = isolated[31];
+  g2.resolveExecution();
+  check(ua2.stunned === 2 && ub2.stunned === 2, '계급 +1.0 vs 군사 1 → 동률');
+
+  // 계급 3(병장, +1.5) vs 군사 1 → 계급 측 승리
+  const { game: g3, civs: c3 } = newGame(2);
+  g3.civs.get(c3[1].id).tech.military = 1;
+  const ua3 = unitsOf(g3, c3[0].id)[0], ub3 = unitsOf(g3, c3[1].id)[0];
+  ua3.rank = 3;
+  [ua3.x, ua3.y] = isolated[32]; [ub3.x, ub3.y] = isolated[32];
+  g3.resolveExecution();
+  check(ua3.stunned === 1 && ua3.rank === 4, '병장(+1.5) 승리 → 하사 진급');
+
+  // 중립 처치도 진급, 대령(12) 상한
+  const { game: g4, civs: c4 } = newGame(2);
+  g4.civs.get(c4[0].id).tech.military = 1;
+  const ua4 = unitsOf(g4, c4[0].id)[0];
+  const isle = [...g4.world.componentSizes()].find(([, v]) => v === 1)[0].split(',').map(Number);
+  g4.spawnNeutralAt('wolf', isle[0], isle[1]);
+  [ua4.x, ua4.y] = isle;
+  ua4.rank = 12;
+  g4.resolveExecution();
+  check(g4.neutrals.size === 0 && ua4.rank === 12, '중립 처치 진급은 대령 상한 유지');
+}
+
 console.log(fail === 0 ? '\n모든 테스트 통과' : `\n실패 ${fail}건`);
 process.exit(fail === 0 ? 0 : 1);
