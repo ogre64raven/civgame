@@ -381,5 +381,87 @@ const key = (h) => h[0] + ',' + h[1];
   check(bCiv.capitalHp === 15, `만렙 2계통 → 턴당 3 회복 (HP ${bCiv.capitalHp})`);
 }
 
+// ── 12. 요새: 건설·비용·차단·공성·파괴·회복
+{
+  const { game, civs } = newGame(2);
+  const [A, B] = civs;
+  game.resolveExecution(); // _captures 준비
+  const aCiv = game.civs.get(A.id);
+  // 육지 이웃이 있는 자리 선정
+  let spot = null, nb = null;
+  for (let i = 36; i < isolated.length && !spot; i++) {
+    const cand = isolated[i];
+    const n2 = game.world.neighbors(cand[0], cand[1]).find(([x, y]) => game.world.isLand(x, y));
+    if (n2) { spot = cand; nb = n2; }
+  }
+  const ua = unitsOf(game, A.id)[0];
+  [ua.x, ua.y] = spot;
+  game.setTile(spot[0] + ',' + spot[1], A.id);
+  aCiv.resources.stone = 10; aCiv.resources.wood = 10;
+  check(game.fortOrder(A.id, ua.id).ok === true, '요새 예약');
+  const rr = game.resolveExecution();
+  const fk = spot[0] + ',' + spot[1];
+  const fort = game.forts.get(fk);
+  check(!!fort && fort.hp === 3 && fort.max === 3, `건설 완료, HP 3 (수도 5의 절반 올림)`);
+  const g2 = (rr.gains && rr.gains[A.id]) || {};
+  check(aCiv.resources.stone === (g2.stone || 0) && aCiv.resources.wood === (g2.wood || 0),
+    '돌10+목재10 소모 (채취 수입 제외 0)');
+  check(rr.fortEvents.some(e => e.type === 'built' && e.civId === A.id), 'built 이벤트');
+  aCiv.resources.stone = 10; aCiv.resources.wood = 10;
+  check(game.fortOrder(A.id, ua.id).reason === 'tile', '같은 타일 중복 건설 거부');
+
+  // 적 이동 차단
+  const ub = unitsOf(game, B.id)[0];
+  [ub.x, ub.y] = nb;
+  check(game.moveOrder(B.id, ub.id, spot).reason === 'path', '적 요새 타일로 경로 없음 (우회/차단)');
+
+  // 공성: 인접 적 유닛 1기(군사 0) → 턴당 1 피해
+  [ua.x, ua.y] = isolated[34]; // A 유닛 이탈
+  game.resolveExecution();
+  check(game.forts.get(fk).hp === 2, '인접 공성 → HP 2');
+  game.resolveExecution();
+  const r3 = game.resolveExecution();
+  check(!game.forts.has(fk), 'HP 0 → 요새 파괴');
+  check(r3.fortEvents.some(e => e.type === 'destroyed' && e.by === B.id), 'destroyed 이벤트');
+
+  // 회복: 공격자가 없으면 턴당 +1
+  [ub.x, ub.y] = isolated[33];
+  game.forts.set(fk, { x: spot[0], y: spot[1], civ: A.id, hp: 1, max: 3 });
+  game.resolveExecution();
+  check(game.forts.get(fk).hp === 2, '공격 없음 → HP 회복 +1');
+}
+
+// ── 13. 패배 누적 행동불능 · 군사 연구 리셋 · 곡식 회복
+{
+  const { game, civs } = newGame(2);
+  const [A, B] = civs;
+  game.civs.get(B.id).tech.military = 1; // B 우위
+  const ua = unitsOf(game, A.id)[0], ub = unitsOf(game, B.id)[0];
+  const hex = isolated[35];
+  [ua.x, ua.y] = hex; [ub.x, ub.y] = hex;
+  game.resolveExecution();
+  check(ua.stunned === 2 && ua.fatigue === 1, '1패 → 행동불능 2턴 (누적 1)');
+
+  ua.stunned = 0; ub.stunned = 0;
+  [ua.x, ua.y] = hex; [ub.x, ub.y] = hex;
+  game.resolveExecution();
+  check(ua.stunned === 3 && ua.fatigue === 2, '2패 → 행동불능 3턴 (누적 2)');
+
+  const aCiv = game.civs.get(A.id);
+  aCiv.resources.iron = 20;
+  game.researchOrder(A.id, 'military');
+  game.resolveExecution();
+  check(ua.fatigue === 0, '군사 기술 향상 → 누적 리셋');
+
+  ua.stunned = 4; ua.fatigue = 3;
+  aCiv.resources.grain = 9;
+  check(game.rallyOrder(A.id, ua.id).reason === 'cost', '곡식 부족 → 회복 거부');
+  aCiv.resources.grain = 10;
+  const rr2 = game.rallyOrder(A.id, ua.id);
+  check(rr2.ok && ua.stunned === 0 && ua.fatigue === 0, '곡식 10 → 즉시 회복 + 누적 초기화');
+  check(aCiv.resources.grain === 0, '곡식 소모');
+  check(game.rallyOrder(A.id, ua.id).reason === 'state', '회복 불필요 시 거부');
+}
+
 console.log(fail === 0 ? '\n모든 테스트 통과' : `\n실패 ${fail}건`);
 process.exit(fail === 0 ? 0 : 1);

@@ -6,6 +6,8 @@ const countries = require('../data/countries.json');
 const MAX_PLAYERS = 30;
 const START_UNITS = 3;                  // 시작 유닛 수
 const SPAWN_COST = 10;                  // 유닛 생산 비용 (고기·곡식 각각)
+const FORT_COST = 10;                   // 요새 건설 비용 (돌·목재 각각)
+const RALLY_COST = 10;                  // 유닛 회복(사기 진작) 비용 (곡식)
 const TECH_MAX = 5;
 const TECH_RES = { military: 'iron', defense: 'grain', gather: 'wood', move: 'stone' };
 const techCost = (targetLevel) => 20 * targetLevel;
@@ -64,6 +66,8 @@ class Game {
     this.treasures = new Map();         // 'x,y' -> { kind: 'res'|'tech' }
     this.neutrals = new Map();          // id -> { id, kind, x, y, stunned } (야생동물·원시 부족)
     this.nextNeutralId = 1;
+    this.forts = new Map();             // 'x,y' -> { x, y, civ, hp, max } (요새/장성)
+    this.fortOrders = new Map();        // 'x,y' -> civId (회의 턴 예약)
     this.pendingTechChoices = new Map(); // civId -> 남은 기술 선택 횟수
     this.ended = false;
     this.pool = shuffle(eligibleCountryIndices(world));
@@ -112,6 +116,7 @@ class Game {
       this.territoryByCiv.delete(civId);
     }
     this.dissolveDiplomacyFor(civId);
+    for (const [fk, f] of [...this.forts]) if (f.civ === civId) this.forts.delete(fk);
     for (const v of this.civs.values()) if (v.conqueredBy === civId) v.conqueredBy = null;
     this.researchOrders.delete(civId);
     this.spawnOrders.delete(civId);
@@ -287,6 +292,7 @@ class Game {
       if (n.stunned > 0) { stunnedNowN.add(n.id); n.stunned--; continue; }
       const opts = this.world.neighbors(n.x, n.y).filter(([x, y]) => {
         if (!this.world.isLand(x, y)) return false;
+        if (this.forts.has(x + ',' + y)) return false; // 장성 통과 불가
         for (const c of this.civs.values())
           if (c.alive && c.capital[0] === x && c.capital[1] === y) return false;
         return true;
@@ -348,6 +354,7 @@ class Game {
         let best = openBranch[0];
         for (const b of openBranch) if (civ.tech[b] < civ.tech[best]) best = b;
         civ.tech[best]++;
+        if (best === 'military') this.resetFatigue(civId);
         ev.branch = best;
         ev.level = civ.tech[best];
       } else {
@@ -370,9 +377,15 @@ class Game {
     if (!civ || !(branch in TECH_RES)) return { ok: false, reason: 'branch' };
     if (civ.tech[branch] >= TECH_MAX) return { ok: false, reason: 'max' };
     civ.tech[branch]++;
+    if (branch === 'military') this.resetFatigue(civId);
     if (n === 1) this.pendingTechChoices.delete(civId);
     else this.pendingTechChoices.set(civId, n - 1);
     return { ok: true, branch, level: civ.tech[branch], remaining: n - 1 };
+  }
+
+  // 군사 기술 향상 → 전 유닛 패배 누적 리셋
+  resetFatigue(civId) {
+    for (const u of this.units.values()) if (u.civ === civId) u.fatigue = 0;
   }
 
   // 유닛 상한 = 시작 3기 + 인구(defense) 기술 레벨
@@ -451,6 +464,8 @@ class Game {
       const steps = []; // 이번 턴에 밟은 헥스 (클라이언트 이동 애니메이션용)
       while (order.idx < order.path.length) {
         const [nx, ny] = order.path[order.idx];
+        const fortAt = this.forts.get(nx + ',' + ny);
+        if (fortAt && fortAt.civ !== u.civ && !this.isAllied(fortAt.civ, u.civ)) break; // 장성에 막힘 (인접 대기)
         const cost = this.moveCost(nx, ny);
         if (cost > budget) break;
         budget -= cost;
@@ -475,6 +490,55 @@ class Game {
     // ②.3 중립 유닛: 배회 → 영토 해제 → 교전
     const neutralRes = this.resolveNeutrals(stunnedNow);
     stuns.push(...neutralRes.stuns);
+
+    // ②.4 요새 건설 (예약분) — 자원 차감, 적 점유 시 실패
+    const fortEvents = [], fortFails = [];
+    for (const [fk, civId] of this.fortOrders) {
+      const civ = this.civs.get(civId);
+      if (!civ || !civ.alive) continue;
+      if (this.territory.get(fk) !== civId || this.forts.has(fk)) { fortFails.push({ civId, reason: 'tile' }); continue; }
+      if (civ.resources.stone < FORT_COST || civ.resources.wood < FORT_COST) { fortFails.push({ civId, reason: 'cost' }); continue; }
+      const [fx2, fy2] = fk.split(',').map(Number);
+      const enemyOn = [...this.units.values()].some(
+        u2 => u2.x === fx2 && u2.y === fy2 && u2.civ !== civId && !this.isAllied(u2.civ, civId));
+      if (enemyOn) { fortFails.push({ civId, reason: 'blocked' }); continue; }
+      civ.resources.stone -= FORT_COST;
+      civ.resources.wood -= FORT_COST;
+      const fmax = Math.ceil(this.maxCapitalHp(civ) / 2); // 수도 HP의 절반
+      this.forts.set(fk, { x: fx2, y: fy2, civ: civId, hp: fmax, max: fmax });
+      fortEvents.push({ type: 'built', x: fx2, y: fy2, civId });
+    }
+    this.fortOrders.clear();
+
+    // ②.45 요새 공성: 인접 적 유닛이 유닛당 (1+군사Lv) 피해. 없으면 턴당 1 회복
+    for (const [fk, fort] of [...this.forts]) {
+      let total = 0, by = null, best = -1;
+      for (const [nx, ny] of this.world.neighbors(fort.x, fort.y)) {
+        for (const u2 of this.units.values()) {
+          if (u2.x !== nx || u2.y !== ny) continue;
+          if (u2.civ === fort.civ || this.isAllied(u2.civ, fort.civ)) continue;
+          if (u2.stunned > 0 || stunnedNow.has(u2.id)) continue;
+          const atk = this.civs.get(u2.civ);
+          const dmg = 1 + ((atk && atk.tech.military) || 0);
+          total += dmg;
+          if (dmg > best) { best = dmg; by = u2.civ; }
+        }
+      }
+      if (total === 0) {
+        if (fort.hp < fort.max) {
+          fort.hp = Math.min(fort.max, fort.hp + 1);
+          fortEvents.push({ type: 'hit', x: fort.x, y: fort.y, civId: fort.civ, hp: fort.hp, max: fort.max });
+        }
+        continue;
+      }
+      fort.hp = Math.max(0, fort.hp - total);
+      if (fort.hp <= 0) {
+        this.forts.delete(fk);
+        fortEvents.push({ type: 'destroyed', x: fort.x, y: fort.y, civId: fort.civ, by });
+      } else {
+        fortEvents.push({ type: 'hit', x: fort.x, y: fort.y, civId: fort.civ, hp: fort.hp, max: fort.max, by });
+      }
+    }
 
     // ②.5 접촉 기록 (동맹 가능 조건)
     this.updateContacts();
@@ -528,6 +592,7 @@ class Game {
       if (civ.resources[res] < cost) { researchFails.push({ civId, reason: 'cost' }); continue; }
       civ.resources[res] -= cost;
       civ.tech[branch] = lvl + 1;
+      if (branch === 'military') this.resetFatigue(civId);
       techUpdates.push({ civId, branch, level: lvl + 1 });
     }
     this.researchOrders.clear();
@@ -606,6 +671,7 @@ class Game {
       gains, births, spawnFails, techUpdates, researchFails, allyLeft, absorptions, gameover,
       treasures: treasureEvents,
       neutrals: this.neutralsPublic(), neutralEvents: neutralRes.events,
+      forts: this.fortsPublic(), fortEvents, fortFails,
       scores: this.scoresPublic(),
     };
   }
@@ -670,8 +736,9 @@ class Game {
         for (const u of l.units) {
           const home = this.civs.get(u.civ).capital;
           u.x = home[0]; u.y = home[1];
-          u.stunned = 2;
-          stuns.push({ unitId: u.id, turns: 2 });
+          u.fatigue = (u.fatigue || 0) + 1;      // 패배 누적 → 행동불능 증가
+          u.stunned = 1 + u.fatigue;             // 1패 2턴, 2패 3턴 …
+          stuns.push({ unitId: u.id, turns: u.stunned, fatigue: u.fatigue });
           retreats.push({ unitId: u.id, x: u.x, y: u.y });
         }
       }
@@ -775,6 +842,7 @@ class Game {
     if (tiles) for (const k of [...tiles]) this.setTile(k, byId);
     civ.alive = false;
     civ.conqueredBy = byId;
+    for (const f of this.forts.values()) if (f.civ === civ.id) f.civ = byId; // 요새 편입
     this.researchOrders.delete(civ.id);
     this.spawnOrders.delete(civ.id);
     this.dissolveDiplomacyFor(civ.id);
@@ -881,7 +949,7 @@ class Game {
         [sx, sy] = base[base.length - 1];
       }
     }
-    const path = this.findPath(sx, sy, tx, ty);
+    const path = this.findPath(sx, sy, tx, ty, u.civ);
     if (!path) return { ok: false, reason: 'path' };
     const full = base.concat(path);
     if (full.length === 0) { this.orders.delete(unitId); return { ok: true, path: [] }; }
@@ -904,6 +972,43 @@ class Game {
     if (civ.resources.stone < SPAWN_COST || civ.resources.grain < SPAWN_COST) return { ok: false, reason: 'cost' };
     this.spawnOrders.add(civId);
     return { ok: true, cost: SPAWN_COST };
+  }
+
+  // 요새 건설 예약 (회의 턴) — 자기 유닛이 서 있는 자기 영토에
+  fortOrder(civId, unitId) {
+    if (this.state !== 'RUNNING' || this.phase !== 'MEETING') return { ok: false, reason: 'phase' };
+    const civ = this.civs.get(civId);
+    if (!civ || !civ.alive) return { ok: false, reason: 'dead' };
+    const u = this.units.get(unitId);
+    if (!u || u.civ !== civId) return { ok: false, reason: 'unit' };
+    if (u.stunned > 0) return { ok: false, reason: 'stunned' };
+    const k = u.x + ',' + u.y;
+    if (!this.world.isLand(u.x, u.y)) return { ok: false, reason: 'tile' };
+    if (this.territory.get(k) !== civId) return { ok: false, reason: 'tile' };
+    if (this.forts.has(k)) return { ok: false, reason: 'tile' };
+    for (const c of this.civs.values()) {
+      if (c.alive && c.capital[0] === u.x && c.capital[1] === u.y) return { ok: false, reason: 'tile' };
+    }
+    if (civ.resources.stone < FORT_COST || civ.resources.wood < FORT_COST) return { ok: false, reason: 'cost' };
+    this.fortOrders.set(k, civId);
+    return { ok: true, cost: FORT_COST };
+  }
+
+  fortsPublic() { return [...this.forts.values()]; }
+
+  // 유닛 회복: 곡식을 소모해 현재 행동불능과 패배 누적을 즉시 리셋 (회의 턴)
+  rallyOrder(civId, unitId) {
+    if (this.state !== 'RUNNING' || this.phase !== 'MEETING') return { ok: false, reason: 'phase' };
+    const civ = this.civs.get(civId);
+    if (!civ || !civ.alive) return { ok: false, reason: 'dead' };
+    const u = this.units.get(unitId);
+    if (!u || u.civ !== civId) return { ok: false, reason: 'unit' };
+    if (u.stunned <= 0 && (u.fatigue || 0) <= 0) return { ok: false, reason: 'state' };
+    if (civ.resources.grain < RALLY_COST) return { ok: false, reason: 'cost' };
+    civ.resources.grain -= RALLY_COST;
+    u.stunned = 0;
+    u.fatigue = 0;
+    return { ok: true, cost: RALLY_COST, resources: civ.resources };
   }
 
   researchOrder(civId, branch) {
@@ -1066,7 +1171,7 @@ class Game {
   }
 
   // 다익스트라 최단 경로 (지형별 이동 비용 적용). 시작 제외, 목표 포함.
-  findPath(sx, sy, tx, ty) {
+  findPath(sx, sy, tx, ty, civId) {
     if (sx === tx && sy === ty) return [];
     const key = (x, y) => x + ',' + y;
     const startK = key(sx, sy);
@@ -1089,6 +1194,10 @@ class Game {
           return path.reverse();
         }
         for (const [nx, ny] of this.world.neighbors(cx, cy)) {
+          if (civId != null) {
+            const f = this.forts.get(nx + ',' + ny);
+            if (f && f.civ !== civId && !this.isAllied(f.civ, civId)) continue; // 적 장성 우회
+          }
           const cost = Math.round(this.moveCost(nx, ny) * 2); // 정수 버킷용 2배 스케일
           const nd = d + cost;
           const nk = key(nx, ny);
@@ -1183,6 +1292,7 @@ class Game {
       territory: this.territoryPublic(),
       treasures: this.treasuresPublic(),
       neutrals: this.neutralsPublic(),
+      forts: this.fortsPublic(),
       alliances: this.alliancesPublic(),
       state: this.state,
       phase: this.phase, turn: this.turn, endsAt: this.phaseEnds,

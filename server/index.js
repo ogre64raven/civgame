@@ -45,6 +45,7 @@ function makeGame() {
       allyLeft: result.allyLeft, absorptions: result.absorptions, scores: result.scores,
       treasures: result.treasures,
       neutrals: result.neutrals, neutralEvents: result.neutralEvents,
+      forts: result.forts, fortEvents: result.fortEvents,
     });
     for (const c of wss.clients) {
       if (c.readyState !== 1 || c.civId == null) continue;
@@ -55,6 +56,8 @@ function makeGame() {
       if (rf) sendTo(c, { type: 'researchFailed', reason: rf.reason });
       const sf = result.spawnFails.find(f => f.civId === c.civId);
       if (sf) sendTo(c, { type: 'spawnFailed', reason: sf.reason });
+      const ff = (result.fortFails || []).find(f => f.civId === c.civId);
+      if (ff) sendTo(c, { type: 'fortFailed', reason: ff.reason });
       for (const ev of result.treasures || []) {
         if (ev.choice && ev.by === c.civId) sendTo(c, { type: 'treasureTechOffer' });
       }
@@ -103,6 +106,7 @@ function handleAdmin(req, res, url, body) {
       territory: game.territoryPublic(),
       treasures: game.treasuresPublic(),
       neutrals: game.neutralsPublic(),
+      forts: game.fortsPublic(),
       phase: game.phase, turn: game.turn, endsAt: game.phaseEnds,
     });
     return send(200, { ok: true });
@@ -244,6 +248,21 @@ wss.on('connection', (ws) => {
         const r = game.spawnOrder(ws.civId);
         if (r.ok) sendTo(ws, { type: 'spawnAck', cost: r.cost });
         else sendTo(ws, { type: 'spawnRejected', reason: r.reason });
+        break;
+      }
+      case 'order.fort': {
+        if (ws.civId == null) return;
+        const r = game.fortOrder(ws.civId, msg.unitId);
+        if (r.ok) sendTo(ws, { type: 'fortAck', cost: r.cost });
+        else sendTo(ws, { type: 'fortRejected', reason: r.reason });
+        break;
+      }
+      case 'order.rally': {
+        if (ws.civId == null) return;
+        const r = game.rallyOrder(ws.civId, msg.unitId);
+        if (!r.ok) { sendTo(ws, { type: 'rallyRejected', reason: r.reason }); break; }
+        sendTo(ws, { type: 'rallyAck', unitId: msg.unitId, resources: r.resources });
+        broadcast({ type: 'unitRallied', unitId: msg.unitId, civId: ws.civId });
         break;
       }
       case 'order.research': {

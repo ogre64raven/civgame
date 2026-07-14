@@ -13,6 +13,7 @@
     contacts: new Set(),
     treasures: new Set(),
     neutrals: [],
+    forts: [], // { x, y, civ, hp, max }
     unitAnims: new Map(), // unitId -> { steps, start, end } (실행 턴 이동 연출)
     queuedResearch: null,
     you: null,
@@ -38,6 +39,10 @@
     notally: '동맹이 아닙니다', civ: '대상이 올바르지 않습니다',
     nocontact: '아직 접촉하지 않은 문명입니다 — 유닛을 접근시키세요',
     notreasure: '선택할 보물 효과가 없습니다',
+    tile: '요새를 지을 수 없는 곳입니다 (내 영토·빈 타일이어야 함)',
+    blocked: '적 유닛이 있어 요새를 지을 수 없습니다',
+    stunned: '행동불능 유닛은 건설할 수 없습니다',
+    state: '회복할 필요가 없는 유닛입니다',
   };
   const TECH_KO = { military: '군사', defense: '인구', gather: '채집', move: '이동' };
   const NEUTRAL_KO = { wolf: '늑대', bear: '곰', tiger: '호랑이', lion: '사자', tribe: '원시 부족' };
@@ -106,6 +111,7 @@
         state.contacts = new Set(msg.contacts || []);
         state.treasures = new Set((msg.treasures || []).map(([tx2, ty2]) => tx2 + ',' + ty2));
         state.neutrals = msg.neutrals || [];
+        state.forts = msg.forts || [];
         state.unitAnims = new Map();
         if (msg.token) sessionStorage.setItem('civToken', msg.token);
         if (msg.you != null) state.you = msg.you;
@@ -138,6 +144,7 @@
         state.units = new Map((msg.units || []).map(u => [u.id, u]));
         state.treasures = new Set((msg.treasures || []).map(([tx2, ty2]) => tx2 + ',' + ty2));
         state.neutrals = msg.neutrals || [];
+        state.forts = msg.forts || [];
         state.unitAnims = new Map();
         state.territory = new Map();
         applyTerritory(msg.territory);
@@ -241,7 +248,7 @@
 
         for (const s of msg.stuns || []) {
           const u = state.units.get(s.unitId);
-          if (u) u.stunned = s.turns;
+          if (u) { u.stunned = s.turns; if (s.fatigue != null) u.fatigue = s.fatigue; }
         }
         for (const nu of msg.births || []) {
           state.units.set(nu.id, nu);
@@ -265,6 +272,14 @@
           }
         }
         if (msg.neutrals) state.neutrals = msg.neutrals;
+        if (msg.forts) state.forts = msg.forts;
+        for (const ev of msg.fortEvents || []) {
+          if (ev.type === 'built' && ev.civId === state.you) toast('요새 완공!');
+          else if (ev.type === 'destroyed') {
+            if (ev.civId === state.you) toast('요새가 파괴되었습니다!');
+            else if (ev.by === state.you) toast('적 요새를 무너뜨렸습니다!');
+          }
+        }
         for (const ev of msg.neutralEvents || []) {
           const nm = NEUTRAL_KO[ev.kind] || ev.kind;
           if (ev.type === 'raid' && ev.civId === state.you) toast(`${nm}이(가) 내 영토를 침범했습니다!`);
@@ -376,6 +391,29 @@
         state.proposals.delete(b);
         if (a === state.you || b === state.you) toast(`동맹 성립: ${civName(a)} - ${civName(b)}`);
         renderPlayers();
+        break;
+      }
+      case 'unitRallied': {
+        const u = state.units.get(msg.unitId);
+        if (u) { u.stunned = 0; u.fatigue = 0; }
+        break;
+      }
+      case 'rallyAck': {
+        if (msg.resources) { state.resources = msg.resources; updateHud(); }
+        toast('유닛 회복 — 행동불능 해제, 패배 누적 초기화');
+        break;
+      }
+      case 'rallyRejected': {
+        toast('회복 실패: ' + (REASON_KO[msg.reason] || msg.reason));
+        break;
+      }
+      case 'fortAck': {
+        toast('요새 건설 예약 — 실행 턴에 완공됩니다');
+        break;
+      }
+      case 'fortRejected':
+      case 'fortFailed': {
+        toast('요새 건설 실패: ' + (REASON_KO[msg.reason] || msg.reason));
         break;
       }
       case 'treasureTechOffer': {
@@ -546,6 +584,27 @@
     if (state.spectator || state.you == null || state.ended || state.gameState !== 'RUNNING') return;
     send({ type: 'order.spawn' });
   });
+
+  // 요새 버튼: 선택한 유닛이 서 있는 내 영토에 건설
+  $('fortBtn').addEventListener('click', () => {
+    if ($('fortBtn').disabled || state.selected == null) return;
+    send({ type: 'order.fort', unitId: state.selected });
+  });
+  function updateFortBtn() {
+    let dis = true;
+    if (!state.spectator && state.you != null && !state.ended
+        && state.gameState === 'RUNNING' && state.phase === 'MEETING' && state.selected != null) {
+      const u = state.units.get(state.selected);
+      if (u && u.civ === state.you && u.stunned === 0) {
+        const k = u.x + ',' + u.y;
+        const hasFort = state.forts.some(f => f.x === u.x && f.y === u.y);
+        const isCap = [...state.civs.values()].some(
+          c => c.alive && c.capital && c.capital[0] === u.x && c.capital[1] === u.y);
+        if (state.territory.get(k) === state.you && !hasFort && !isCap) dis = false;
+      }
+    }
+    if ($('fortBtn').disabled !== dis) $('fortBtn').disabled = dis;
+  }
 
   for (const btn of document.querySelectorAll('.tech-btn')) {
     btn.addEventListener('click', () => {
@@ -735,6 +794,7 @@
         $('phaseTimer').textContent = remain;
       }
       renderUnits();
+      updateFortBtn();
       Render.draw(state);
     }
     requestAnimationFrame(frame);
@@ -748,9 +808,9 @@
     if (!state.map || state.you == null || state.spectator) return;
     const mine = [...state.units.values()].filter(isMine).sort((a, b) => a.id - b.id);
     const show = state.gameState === 'RUNNING' && !state.ended && mine.length > 0;
-    let sig = state.selected + '|' + show;
+    let sig = state.selected + '|' + show + '|' + state.phase;
     for (const u of mine) {
-      sig += ';' + u.id + ',' + u.x + ',' + u.y + ',' + u.stunned + ','
+      sig += ';' + u.id + ',' + u.x + ',' + u.y + ',' + u.stunned + ',' + (u.fatigue || 0) + ','
         + (state.myOrders.get(u.id)?.length || 0) + ','
         + (state.territory.get(u.x + ',' + u.y) ?? 'n') + ',' + (u.controller || 0);
     }
@@ -767,7 +827,8 @@
       row.className = 'unit-row' + (state.selected === u.id ? ' sel' : '');
       let status, cls;
       const path = state.myOrders.get(u.id);
-      if (u.stunned > 0) { status = `행동불능 ${u.stunned}턴`; cls = 'st-stun'; }
+      const fat = u.fatigue || 0;
+      if (u.stunned > 0) { status = `행동불능 ${u.stunned}턴` + (fat > 1 ? ` (누적 ${fat}패)` : ''); cls = 'st-stun'; }
       else if (path && path.length) { status = `이동 중 · ${path.length}칸 남음`; cls = 'st-move'; }
       else if (state.territory.get(u.x + ',' + u.y) === u.civ) {
         status = `채집 중 (${TER_RES_KO[state.map.rows[u.y][u.x]] || '?'})`; cls = 'st-gather';
@@ -776,6 +837,17 @@
       row.innerHTML = `<span class="unm">유닛 ${i}${delegated ? ' <span class="tag-deleg">위임</span>' : ''}</span>`
         + `<span class="ust ${cls}">${status}</span>`
         + (state.selected === u.id ? '<span class="tag-sel">선택됨</span>' : '');
+      if ((u.stunned > 0 || fat > 0) && u.civ === state.you && state.phase === 'MEETING') {
+        const rb = document.createElement('button');
+        rb.className = 'rally-btn';
+        rb.textContent = '회복';
+        rb.title = '곡식 10 소모 — 행동불능 즉시 해제 + 패배 누적 초기화';
+        rb.addEventListener('click', (e) => {
+          e.stopPropagation();
+          send({ type: 'order.rally', unitId: u.id });
+        });
+        row.append(rb);
+      }
       row.addEventListener('click', () => {
         state.selected = u.id;
         orderChain = null;

@@ -55,26 +55,33 @@ const Render = (() => {
 
   // 텍스트 스프라이트 (라벨용)
   const textCache = new Map();
-  function textSprite(text, color, worldH) {
-    const key = text + '|' + color;
+  function textSprite(text, color, worldH, wide) {
+    const key = text + '|' + color + '|' + (wide ? 'w' : 'n');
     let tex = textCache.get(key);
+    const W = wide ? 512 : 256;
     if (!tex) {
       const c = document.createElement('canvas');
-      c.width = 256; c.height = 64;
+      c.width = W; c.height = 64;
       const g = c.getContext('2d');
-      g.font = 'bold 40px sans-serif';
+      let size = 40;
+      g.font = 'bold ' + size + 'px sans-serif';
+      const tw = g.measureText(text).width;
+      if (tw > W - 14) { // 길면 자동 축소
+        size = Math.max(18, Math.floor(size * (W - 14) / tw));
+        g.font = 'bold ' + size + 'px sans-serif';
+      }
       g.textAlign = 'center';
       g.textBaseline = 'middle';
       g.lineWidth = 6;
       g.strokeStyle = 'rgba(0,0,0,.75)';
-      g.strokeText(text, 128, 32);
+      g.strokeText(text, W / 2, 32);
       g.fillStyle = color;
-      g.fillText(text, 128, 32);
+      g.fillText(text, W / 2, 32);
       tex = new THREE.CanvasTexture(c);
       textCache.set(key, tex);
     }
     const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false }));
-    sp.scale.set(worldH * 4, worldH, 1);
+    sp.scale.set(worldH * (wide ? 8 : 4), worldH, 1);
     sp.renderOrder = 999;
     return sp;
   }
@@ -476,7 +483,7 @@ const Render = (() => {
     scene.add(terrainGroup);
 
     // 영토 오버레이 (인스턴스 색)
-    const landCount = byType.g.length + byType.p.length + byType.f.length + byType.m.length;
+    const landCount = byType.g.length + byType.p.length + byType.f.length + byType.h.length + byType.m.length + byType.M.length;
     territoryMesh = new THREE.InstancedMesh(GEO.overlay,
       new THREE.MeshLambertMaterial({ transparent: true, opacity: 0.5 }), landCount);
     territoryMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(landCount * 3), 3);
@@ -507,6 +514,7 @@ const Render = (() => {
     for (const u of state.units.values()) s += ';' + u.id + ',' + u.x + ',' + u.y + ',' + u.stunned + ',' + (u.controller || 0) + ',' + u.civ;
     for (const n of state.neutrals || []) s += ';N' + n.id + ',' + n.x + ',' + n.y + ',' + n.stunned;
     if (state.unitAnims) for (const uid of state.unitAnims.keys()) s += ';A' + uid;
+    for (const f of state.forts || []) s += ';F' + f.x + ',' + f.y + ',' + f.civ + ',' + f.hp;
     for (const c of state.civs.values()) {
       const t = c.tech || {};
       s += ';' + c.id + ',' + (c.alive ? 1 : 0) + ',' + c.capitalHp + ',' + ((t.military || 0) + '' + (t.defense || 0) + (t.gather || 0) + (t.move || 0));
@@ -575,6 +583,24 @@ const Render = (() => {
       col.set(civ.color);
       territoryMesh.setColorAt(ti, col);
       ti++;
+    }
+    // 미점령 육지는 흰색으로 (점령지 색과 구분)
+    col.set(0xf2f2ee);
+    for (let wy = 0; wy < map.h; wy++) {
+      for (let wxx = 0; wxx < map.w; wxx++) {
+        const t = map.rows[wy][wxx];
+        if (t === '~') continue;
+        if (state.territory.has(wxx + ',' + wy)) continue;
+        if (!isVis(wxx, wy)) continue;
+        const [px, pz] = worldPos(wxx, wy);
+        dummy.position.set(px, topY(t) + 0.5, pz);
+        dummy.scale.set(1, 1, 1);
+        dummy.rotation.set(0, 0, 0);
+        dummy.updateMatrix();
+        territoryMesh.setMatrixAt(ti, dummy.matrix);
+        territoryMesh.setColorAt(ti, col);
+        ti++;
+      }
     }
     territoryMesh.count = ti;
     territoryMesh.instanceMatrix.needsUpdate = true;
@@ -657,6 +683,73 @@ const Render = (() => {
       }
     }
 
+    // 요새 — 인접한 같은 문명 요새·수도와 성벽으로 이어져 장성이 됨
+    if (state.forts && state.forts.length) {
+      const stoneMat = mat(0xb7b3a8), darkMat = mat(0x8e8a80);
+      const fortAt = new Map();
+      for (const f of state.forts) fortAt.set(f.x + ',' + f.y, f.civ);
+      const capAt = new Map();
+      for (const c of state.civs.values()) {
+        if (c.alive && c.capital) capAt.set(c.capital[0] + ',' + c.capital[1], c.id);
+      }
+      for (const f of state.forts) {
+        if (!isVis(f.x, f.y)) continue;
+        const [wx, wz] = worldPos(f.x, f.y);
+        const ty = topY(map.rows[f.y][f.x]);
+        const g = new THREE.Group();
+        // 중앙 망루 + 총안(merlon)
+        const tower = new THREE.Mesh(new THREE.BoxGeometry(5.2, 9, 5.2), stoneMat);
+        tower.position.y = 4.5;
+        g.add(tower);
+        for (const [mx, mz] of [[-1.8, -1.8], [1.8, -1.8], [-1.8, 1.8], [1.8, 1.8]]) {
+          const merlon = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.6, 1.4), darkMat);
+          merlon.position.set(mx, 9.6, mz);
+          g.add(merlon);
+        }
+        const civF = state.civs.get(f.civ);
+        if (civF) {
+          const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 5, 5), darkMat);
+          pole.position.y = 12;
+          g.add(pole);
+          const flag = new THREE.Mesh(new THREE.BoxGeometry(2.8, 1.7, 0.2), mat(new THREE.Color(civF.color)));
+          flag.position.set(1.5, 13.6, 0);
+          g.add(flag);
+        }
+        // 성벽: 같은 문명의 인접 요새/수도 방향으로 절반씩 (양쪽이 그리면 이어짐)
+        for (const [nx, ny] of hexNeighbors(map, f.x, f.y)) {
+          const nk = nx + ',' + ny;
+          if (fortAt.get(nk) !== f.civ && capAt.get(nk) !== f.civ) continue;
+          const [nwx, nwz] = worldPos(nx, ny);
+          if (Math.abs(nwx - wx) > HEX * SQRT3 * 2) continue; // 맵 경계 랩은 생략
+          const dx = nwx - wx, dz = nwz - wz;
+          const dist = Math.sqrt(dx * dx + dz * dz);
+          const half = dist / 2 + 0.6;
+          const ang = Math.atan2(dz, dx);
+          const wall = new THREE.Mesh(new THREE.BoxGeometry(half, 5.5, 2.8), stoneMat);
+          wall.position.set(dx / 4, 2.75, dz / 4);
+          wall.rotation.y = -ang;
+          g.add(wall);
+          for (const t of [0.2, 0.5, 0.8]) { // 총안
+            const m2 = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.2, 3.0), darkMat);
+            m2.position.set(dx / 2 * t, 5.9, dz / 2 * t);
+            m2.rotation.y = -ang;
+            g.add(m2);
+          }
+        }
+        // HP바 (손상 시)
+        if (f.hp < f.max) {
+          const ratio = Math.max(0, f.hp / f.max);
+          const bg = new THREE.Mesh(new THREE.BoxGeometry(HEX * 1.2, 1, 1), mat(0x000000));
+          bg.position.set(0, 16.5, 0);
+          const fg = new THREE.Mesh(new THREE.BoxGeometry(HEX * 1.2 * ratio, 1.2, 1.2), mat(ratio > 0.4 ? 0x4ade80 : 0xf87171));
+          fg.position.set(-HEX * 0.6 * (1 - ratio), 16.5, 0);
+          g.add(bg, fg);
+        }
+        g.position.set(wx, ty, wz);
+        dynamicGroup.add(g);
+      }
+    }
+
     // 수도 (링 + 건물 + HP바)
     for (const civ of state.civs.values()) {
       const [kx, ky] = civ.capital;
@@ -671,6 +764,10 @@ const Render = (() => {
       const b = makeBuilding(civ);
       b.position.set(wx, ty, wz);
       dynamicGroup.add(b);
+      // 나라 이름 + 3글자 약자
+      const capLabel = textSprite(`${civ.name} ${civ.code}`, civ.color, 6, true);
+      capLabel.position.set(wx, ty + 24, wz);
+      dynamicGroup.add(capLabel);
       if (civ.capitalMaxHp && civ.capitalHp < civ.capitalMaxHp) {
         const ratio = Math.max(0, civ.capitalHp / civ.capitalMaxHp);
         const bg = new THREE.Mesh(new THREE.BoxGeometry(HEX * 1.6, 1.2, 1.2), mat(0x000000));
