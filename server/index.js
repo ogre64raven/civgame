@@ -202,7 +202,7 @@ wss.on('connection', (ws) => {
       case 'join': {
         // 방 번호 검증 (재접속 토큰이 유효하면 생략)
         if (!(msg.token && game.tokens.has(msg.token)) && String(msg.room || '') !== game.room) {
-          sendTo(ws, { type: 'joinRejected', reason: 'room' });
+          sendTo(ws, { type: 'joinRejected', reason: 'room', staleToken: !!msg.token });
           return;
         }
         const r = game.join(msg.token, msg.name);

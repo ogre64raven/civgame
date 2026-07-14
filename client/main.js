@@ -173,7 +173,12 @@
         break;
       }
       case 'joinRejected': {
-        $('joinMsg').textContent = msg.reason === 'room' ? '방 번호가 올바르지 않습니다' : '입장할 수 없습니다';
+        if (msg.staleToken) {
+          sessionStorage.removeItem('civToken'); // 강퇴 등으로 만료된 세션 정리
+          $('joinMsg').textContent = '이전 세션이 만료되었습니다 — 방 번호를 입력하면 새 국가로 입장합니다';
+        } else {
+          $('joinMsg').textContent = msg.reason === 'room' ? '방 번호가 올바르지 않습니다' : '입장할 수 없습니다';
+        }
         $('joinOverlay').style.display = 'flex';
         break;
       }
@@ -229,6 +234,7 @@
         const animNow = Date.now();
         for (const mv of msg.moves) {
           const u = state.units.get(mv.unitId);
+          if (mv.retreat) state.myOrders.delete(mv.unitId); // 패배 후퇴 → 경로 취소
           if (u && mv.steps && mv.steps.length) {
             state.unitAnims.set(mv.unitId, {
               steps: [[u.x, u.y], ...mv.steps],
@@ -303,7 +309,7 @@
           Render.addBattleFx({ hex: b.hex, winners: winnersFx, losers: losersFx, draw: losersFx.length === 0 });
           const mine = b.civs.find(c => c.civId === state.you);
           if (!mine) continue;
-          if (mine.lost > 0) toast(`전투 패배 — 유닛이 수도로 후퇴합니다`);
+          if (mine.lost > 0) toast(`전투 패배 — 유닛이 근처로 후퇴합니다`);
           else if (b.civs.every(c => c.lost === 0)) toast('전투 — 전투력 동률, 양측 행동불능');
           else toast('전투 승리! 적이 후퇴했습니다');
         }

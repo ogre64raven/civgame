@@ -91,11 +91,11 @@ const key = (h) => h[0] + ',' + h[1];
   const ua = unitsOf(game, A.id)[0], ub = unitsOf(game, B.id)[0];
   [ua.x, ua.y] = hex; [ub.x, ub.y] = hex;
   const r = game.resolveExecution();
-  const bCap = game.civs.get(B.id).capital;
-  check(ub.x === bCap[0] && ub.y === bCap[1] && ub.stunned === 2, '패자: 수도 후퇴 + 2턴 행동불능');
+  const dRet = world.hexDistance(ub.x, ub.y, hex[0], hex[1]);
+  check(dRet === 2 && ub.stunned === 2, `패자: 전투 지점 2헥스 근처로 후퇴 + 2턴 행동불능 (거리 ${dRet})`);
   check(ua.stunned === 1 && ua.x === hex[0], '승자: 1턴 행동불능, 헥스 유지');
   check(game.territory.get(key(hex)) === A.id, '전투 헥스 승자 점령');
-  check(r.moves.some(m => m.unitId === ub.id && m.x === bCap[0]), '후퇴 위치 브로드캐스트');
+  check(r.moves.some(m => m.unitId === ub.id && m.x === ub.x && m.retreat), '후퇴 위치 브로드캐스트');
   check(game.units.size === 2 * START_UNITS, '유닛 소멸 없음');
 }
 
@@ -108,8 +108,7 @@ const key = (h) => h[0] + ',' + h[1];
   const [b1] = unitsOf(game, B.id);
   [a1.x, a1.y] = hex; [a2.x, a2.y] = hex; [b1.x, b1.y] = hex;
   game.resolveExecution();
-  const bCap = game.civs.get(B.id).capital;
-  check(b1.x === bCap[0] && b1.y === bCap[1], '수 우위: 소수 측 후퇴');
+  check(world.hexDistance(b1.x, b1.y, hex[0], hex[1]) === 2, '수 우위: 소수 측 근처 후퇴');
   check(game.units.size === 2 * START_UNITS, '유닛 소멸 없음');
 }
 
@@ -129,8 +128,7 @@ const key = (h) => h[0] + ',' + h[1];
   for (const u of game.units.values()) u.stunned = 0;
   game.civs.get(A.id).tech.military = 2;
   game.resolveExecution();
-  const bCap = game.civs.get(B.id).capital;
-  check(ub.x === bCap[0] && ub.y === bCap[1], '방어 초과 공격 → 수비 측 후퇴');
+  check(world.hexDistance(ub.x, ub.y, hex[0], hex[1]) === 2, '방어 초과 공격 → 수비 측 근처 후퇴');
 }
 
 // ── 7. 수도 함락 → 점령(예속)·유닛/영토 편입·위임
@@ -505,8 +503,7 @@ const key = (h) => h[0] + ',' + h[1];
   [ua3.x, ua3.y] = [rx, ry]; [ub3.x, ub3.y] = [rx + 2, ry];
   g3.orders.set(ua3.id, { path: [[rx + 1, ry], [rx + 2, ry], [rx + 3, ry], [rx + 4, ry]], idx: 0 });
   g3.resolveExecution();
-  const cap3 = g3.civs.get(c3[0].id).capital;
-  check(ua3.x === cap3[0] && ua3.y === cap3[1], '요격 패배 → 수도 후퇴');
+  check(world.hexDistance(ua3.x, ua3.y, rx + 2, ry) === 2, '요격 패배 → 조우 지점 근처 후퇴');
   check(!g3.orders.has(ua3.id), '패자의 남은 경로 취소');
 }
 

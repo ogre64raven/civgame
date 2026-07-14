@@ -829,6 +829,7 @@ const Render = (() => {
 
     // 이동 중인 유닛: 경로를 따라 걷는 개별 피규어 (위치는 draw에서 매 프레임 갱신)
     animMeshes.clear();
+    ownFigs.length = 0;
     const anims = state.unitAnims || new Map();
     for (const [uid, anim] of anims) {
       const u = state.units.get(uid);
@@ -885,6 +886,10 @@ const Render = (() => {
         const gx = wx + (gi - (n - 1) / 2) * HEX * 0.75;
         const fig = makeUnitFigure(civ.color, (civ.tech && civ.tech.military) || 0);
         fig.position.set(gx, ty, wzU);
+        if (state.you != null && civId === state.you) {
+          fig.userData.hex = [x, y];
+          ownFigs.push(fig);
+        }
         const allStunned = group.every(u => u.stunned > 0);
         if (allStunned) fig.traverse(o => { if (o.material) { o.material = o.material.clone(); o.material.transparent = true; o.material.opacity = 0.45; } });
         dynamicGroup.add(fig);
@@ -901,6 +906,7 @@ const Render = (() => {
 
   // ── 이동 애니메이션 (실행 턴 초반, 경로를 따라 걷기)
   const animMeshes = new Map(); // unitId -> { fig, pin, code }
+  const ownFigs = []; // 내 유닛 피규어 (클릭 우선 픽킹용, hex 정보 포함)
   function animWorldPos(map, steps, f) {
     const total = steps.length - 1;
     const at = (i) => {
@@ -1023,6 +1029,21 @@ const Render = (() => {
   const raycaster = new THREE.Raycaster();
   const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   const hitPoint = new THREE.Vector3();
+  // 화면 좌표에서 내 유닛 피규어를 우선 픽킹 → 해당 헥스 반환 (없으면 null)
+  function ownUnitHexAt(screenX, screenY) {
+    if (!ownFigs.length) return null;
+    raycaster.setFromCamera(
+      { x: (screenX / window.innerWidth) * 2 - 1, y: -(screenY / window.innerHeight) * 2 + 1 },
+      camera);
+    const hits = raycaster.intersectObjects(ownFigs, true);
+    for (const h of hits) {
+      let o = h.object;
+      while (o && !o.userData.hex) o = o.parent;
+      if (o && o.userData.hex) return o.userData.hex;
+    }
+    return null;
+  }
+
   function hexAt(screenX, screenY, map) {
     raycaster.setFromCamera(
       { x: (screenX / window.innerWidth) * 2 - 1, y: -(screenY / window.innerHeight) * 2 + 1 }, camera);
@@ -1105,5 +1126,5 @@ const Render = (() => {
     renderer.render(scene, camera);
   }
 
-  return { canvas, cam, HEX, draw, centerOn, hexCenter, hexAt, addBattleFx };
+  return { canvas, cam, HEX, draw, centerOn, hexCenter, hexAt, ownUnitHexAt, addBattleFx };
 })();

@@ -123,6 +123,9 @@ class Game {
     this.spawnOrders.delete(civId);
     this.tokens.delete(civ.token);
     this.civs.delete(civId);
+    // 강퇴된 국가는 배정 풀로 복귀 → 재접속(재입장) 가능
+    const ci = countries.findIndex(c => c.code === civ.code);
+    if (ci >= 0 && !this.pool.includes(ci)) this.pool.push(ci);
     return true;
   }
 
@@ -282,12 +285,12 @@ class Game {
       tryPlace(cands, count);
       return;
     }
-    // 고립도 기반: 반경 14헥스 내 상대 수도 수 → 0개 3마리, 1개 2마리, 그 외 1마리
+    // 고립도 기반: 반경 14헥스 내 상대 수도 수 → 0개 9마리, 1개 6마리, 그 외 3마리
     const civList = [...this.civs.values()];
     for (const civ of civList) {
       const rivals = civList.filter(c => c.id !== civ.id &&
         this.world.hexDistance(civ.capital[0], civ.capital[1], c.capital[0], c.capital[1]) <= 14).length;
-      const quota = rivals === 0 ? 3 : rivals === 1 ? 2 : 1;
+      const quota = rivals === 0 ? 9 : rivals === 1 ? 6 : 3;
       const ring = cands.filter(([x, y]) =>
         this.world.hexDistance(x, y, civ.capital[0], civ.capital[1]) <= 12);
       tryPlace(ring.length ? ring : cands, quota);
@@ -742,6 +745,47 @@ class Game {
     };
   }
 
+  // 전투 패배 후퇴 지점: 전투 지점에서 2헥스 떨어진 빈 육지 중 자기 수도에 가장 가까운 곳.
+  // (수도까지 순간이동하지 않아 수도 공격 실패의 부담이 줄어든다) 없으면 수도로.
+  findRetreatHex(x, y, civ) {
+    const cands = [];
+    const seen = new Set([x + ',' + y]);
+    let frontier = [[x, y]];
+    for (let d = 1; d <= 2; d++) {
+      const next = [];
+      for (const [cx, cy] of frontier) {
+        for (const [nx, ny] of this.world.neighbors(cx, cy)) {
+          const k = nx + ',' + ny;
+          if (seen.has(k)) continue;
+          seen.add(k);
+          next.push([nx, ny]);
+          if (d < 2) continue; // 2헥스 지점만 후보
+          if (!this.world.isLand(nx, ny)) continue;
+          const fort = this.forts.get(k);
+          if (fort && fort.civ !== civ.id && !this.isAllied(fort.civ, civ.id)) continue;
+          let bad = false;
+          for (const c of this.civs.values()) {
+            if (c.alive && c.id !== civ.id && c.capital[0] === nx && c.capital[1] === ny) { bad = true; break; }
+          }
+          if (bad) continue;
+          for (const o of this.units.values()) {
+            if (o.x === nx && o.y === ny && o.civ !== civ.id && !this.isAllied(o.civ, civ.id)) { bad = true; break; }
+          }
+          if (bad) continue;
+          cands.push([nx, ny]);
+        }
+      }
+      frontier = next;
+    }
+    if (!cands.length) return civ.capital;
+    let best = cands[0], bd = Infinity;
+    for (const c of cands) {
+      const d2 = this.world.hexDistance(c[0], c[1], civ.capital[0], civ.capital[1]);
+      if (d2 < bd) { bd = d2; best = c; }
+    }
+    return best;
+  }
+
   // 같은 헥스의 적대 세력 간 전투 (동맹은 연합). 사망 없음.
   // 연합 전투력 = 최고 군사기술 + 수 우위(2배 이상 +1) + 자기 영토면 소유국 방어기술
   // 최고 단독 → 패자 전원 수도 후퇴 + 2턴 행동불능, 승자 1턴. 동률 → 전원 2턴 행동불능.
@@ -793,23 +837,24 @@ class Game {
       const winners = entries.filter(e => e.power === maxP);
       const losers = entries.filter(e => e.power < maxP);
       const stunTurns = winners.length >= 2 ? 2 : 1;
+      const [bhx, bhy] = k.split(',').map(Number);
 
       for (const w of winners) {
         for (const u of w.units) { u.stunned = stunTurns; stuns.push({ unitId: u.id, turns: stunTurns }); }
       }
-      // 패자: 수도로 후퇴 + 2턴 행동불능
+      // 패자: 전투 지점 근처(2헥스, 수도 방향 우선)로 후퇴 + 행동불능
       for (const l of losers) {
         for (const u of l.units) {
-          const home = this.civs.get(u.civ).capital;
-          u.x = home[0]; u.y = home[1];
+          const spot = this.findRetreatHex(bhx, bhy, this.civs.get(u.civ));
+          u.x = spot[0]; u.y = spot[1];
           this.orders.delete(u.id);              // 후퇴 → 남은 경로 취소
           u.fatigue = (u.fatigue || 0) + 1;      // 패배 누적 → 행동불능 증가
           u.stunned = 1 + u.fatigue;             // 1패 2턴, 2패 3턴 …
           stuns.push({ unitId: u.id, turns: u.stunned, fatigue: u.fatigue });
-          retreats.push({ unitId: u.id, x: u.x, y: u.y });
+          retreats.push({ unitId: u.id, x: u.x, y: u.y, retreat: true });
         }
       }
-      const [hx, hy] = k.split(',').map(Number);
+      const [hx, hy] = [bhx, bhy];
       // 승자가 단독이면 전투 헥스 점령
       if (winners.length === 1) this.claim(hx, hy, winners[0].civIds[0]);
       battles.push({

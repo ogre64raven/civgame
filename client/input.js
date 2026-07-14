@@ -13,7 +13,8 @@
     if (dragging && !moved && e.target === canvas) {
       const state = window.gameState;
       if (state && state.map) {
-        const hex = Render.hexAt(e.clientX, e.clientY, state.map);
+        // 겹쳐 보이는 유닛: 내 유닛 피규어를 우선 픽킹 (상대 유닛은 픽킹 대상 아님)
+        const hex = Render.ownUnitHexAt(e.clientX, e.clientY) || Render.hexAt(e.clientX, e.clientY, state.map);
         if (hex) window.dispatchEvent(new CustomEvent('hexclick', { detail: hex }));
       }
     }

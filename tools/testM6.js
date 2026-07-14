@@ -56,6 +56,21 @@ const check = (cond, label) => {
   check(dC >= 8, `충분한 이격 (${dC} ≥ 8)`);
 }
 
+// ── 0.4 강퇴 유저 재접속 (오프라인)
+{
+  const world6 = new World();
+  const g = new Game(world6, () => {});
+  const a = g.join(undefined, 'A').civ;
+  const aCode = a.code, aToken = a.token;
+  const poolBefore = g.pool.length;
+  g.kick(a.id);
+  check(g.pool.length === poolBefore + 1 && g.pool.some(i => countries[i].code === aCode),
+    '강퇴 국가 배정 풀 복귀');
+  // 만료 토큰으로는 기존 문명 복귀 불가, 새 배정은 가능
+  const back = g.join(aToken, 'A다시');
+  check(!!back.civ && back.isNew !== false, '강퇴 유저 재접속 → 새 국가 배정');
+}
+
 // ── 0.5 봇 AI (오프라인)
 {
   const { runBots } = require('../server/bots');

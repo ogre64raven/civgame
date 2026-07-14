@@ -86,8 +86,7 @@ const unitsOf = (g, id) => [...g.units.values()].filter(u => u.civ === id);
   const ua = unitsOf(game, A.id)[0], ub = unitsOf(game, B.id)[0], uc = unitsOf(game, C.id)[0];
   [ua.x, ua.y] = hex; [ub.x, ub.y] = hex; [uc.x, uc.y] = hex;
   game.resolveExecution();
-  const cCap = game.civs.get(C.id).capital;
-  check(uc.x === cCap[0] && uc.y === cCap[1], '연합 승리 → 단독 측 수도 후퇴');
+  check(world.hexDistance(uc.x, uc.y, hex[0], hex[1]) === 2, '연합 승리 → 단독 측 근처 후퇴');
   check(ua.x === hex[0] && ub.x === hex[0], '연합 유닛은 유지');
 }
 
@@ -417,15 +416,15 @@ const unitsOf = (g, id) => [...g.units.values()].filter(u => u.civ === id);
   aCiv.capital = west; bCiv.capital = east;
   check(world.hexDistance(west[0], west[1], east[0], east[1]) > 14, '두 수도 고립 상태');
   game.placeNeutrals('auto');
-  check(game.neutrals.size === 6, `고립 2국 → 각 3마리 (총 ${game.neutrals.size})`);
+  check(game.neutrals.size === 18, `고립 2국 → 각 9마리 (총 ${game.neutrals.size})`);
   const near = (cap) => [...game.neutrals.values()].filter(
     n => world.hexDistance(n.x, n.y, cap[0], cap[1]) <= 12).length;
-  check(near(west) >= 2 && near(east) >= 2, `수도 주변 12헥스 이내 배치 (서 ${near(west)} · 동 ${near(east)})`);
+  check(near(west) >= 6 && near(east) >= 6, `수도 주변 12헥스 이내 배치 (서 ${near(west)} · 동 ${near(east)})`);
 
   // 상대 1국이 근처 → 각 2마리
   bCiv.capital = [west[0] + 6, west[1]]; // 거리 ≤ 14
   game.placeNeutrals('auto');
-  check(game.neutrals.size === 4, `상대 1국 근처 → 각 2마리 (총 ${game.neutrals.size})`);
+  check(game.neutrals.size === 12, `상대 1국 근처 → 각 6마리 (총 ${game.neutrals.size})`);
 }
 {
   // 밀집 3국 (각자 상대 2국) → 각 1마리
@@ -440,7 +439,7 @@ const unitsOf = (g, id) => [...g.units.values()].filter(u => u.civ === id);
   let i = 0;
   for (const c of civs) game.civs.get(c.id).capital = [base[0] + 4 * i++, base[1]];
   game.placeNeutrals('auto');
-  check(game.neutrals.size === 3, `밀집 3국 → 각 1마리 (총 ${game.neutrals.size})`);
+  check(game.neutrals.size === 9, `밀집 3국 → 각 3마리 (총 ${game.neutrals.size})`);
 }
 
 // ── 16. 중립 교전: 강함 = 초기 유닛과 동일 (성장 없음)
