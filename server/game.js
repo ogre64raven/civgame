@@ -218,13 +218,13 @@ class Game {
   }
 
   // ── 중립 유닛 (야생동물·원시 부족): 강함은 항상 초기 문명 유닛과 동일(군사 0), 성장 없음
+  // count 숫자 → 균일 배치. 'auto'/미지정 → 문명별 고립도 기반: 주변에 상대가 적을수록 더 많이.
   placeNeutrals(count) {
     this.neutrals.clear();
-    if (count == null) {
-      count = process.env.NEUTRAL_COUNT != null
-        ? parseInt(process.env.NEUTRAL_COUNT, 10) : this.civs.size;
+    if (count !== 'auto' && count == null && process.env.NEUTRAL_COUNT != null) {
+      count = parseInt(process.env.NEUTRAL_COUNT, 10);
+      if (!count || count < 1) return;
     }
-    if (!count || count < 1) return;
     // 모든 수도로부터의 BFS 거리
     const dist = new Map();
     let frontier = [];
@@ -253,25 +253,43 @@ class Game {
         cands.push([x, y]);
       }
     }
-    // 무작위 순서로 서로 4칸 이상 떨어지게 선정
+    // 무작위 순서
     for (let i = cands.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [cands[i], cands[j]] = [cands[j], cands[i]];
     }
     const ANIMALS = ['wolf', 'bear', 'tiger', 'lion'];
     const placed = [];
-    for (const [x, y] of cands) {
-      if (placed.length >= count) break;
-      const far = placed.every(([px, py]) => {
-        const dx = Math.min(Math.abs(x - px), this.world.w - Math.abs(x - px));
-        return dx + Math.abs(y - py) >= 4;
-      });
-      if (!far) continue;
-      placed.push([x, y]);
-      const id = this.nextNeutralId++;
-      const kind = placed.length % 3 === 0
-        ? 'tribe' : ANIMALS[Math.floor(Math.random() * ANIMALS.length)];
-      this.neutrals.set(id, { id, kind, x, y, stunned: 0 });
+    const tryPlace = (list, n) => {
+      let put = 0;
+      for (const [x, y] of list) {
+        if (put >= n) break;
+        const far = placed.every(([px, py]) => {
+          const dx = Math.min(Math.abs(x - px), this.world.w - Math.abs(x - px));
+          return dx + Math.abs(y - py) >= 4;
+        });
+        if (!far) continue;
+        placed.push([x, y]);
+        const id = this.nextNeutralId++;
+        const kind = placed.length % 3 === 0
+          ? 'tribe' : ANIMALS[Math.floor(Math.random() * ANIMALS.length)];
+        this.neutrals.set(id, { id, kind, x, y, stunned: 0 });
+        put++;
+      }
+    };
+    if (typeof count === 'number') { // 균일 배치 (테스트/수동)
+      tryPlace(cands, count);
+      return;
+    }
+    // 고립도 기반: 반경 14헥스 내 상대 수도 수 → 0개 3마리, 1개 2마리, 그 외 1마리
+    const civList = [...this.civs.values()];
+    for (const civ of civList) {
+      const rivals = civList.filter(c => c.id !== civ.id &&
+        this.world.hexDistance(civ.capital[0], civ.capital[1], c.capital[0], c.capital[1]) <= 14).length;
+      const quota = rivals === 0 ? 3 : rivals === 1 ? 2 : 1;
+      const ring = cands.filter(([x, y]) =>
+        this.world.hexDistance(x, y, civ.capital[0], civ.capital[1]) <= 12);
+      tryPlace(ring.length ? ring : cands, quota);
     }
   }
 
@@ -452,35 +470,63 @@ class Game {
     }
 
     // ① 이동 + 경로 영토화 (+보물 습득)
+    //    라운드 단위 동시 시뮬레이션: 모든 유닛이 한 칸씩 번갈아 전진.
+    //    이동 중 적 유닛과 같은 헥스에서 만나면(교차·정면·주둔지 통과) 양측 그 자리에서
+    //    정지하고, 이동 종료 후 전투 판정에서 교전한다 (요격).
     const treasureEvents = [];
     const moves = [];
+    const plans = [];
     for (const [unitId, order] of this.orders) {
       const u = this.units.get(unitId);
       if (!u) { this.orders.delete(unitId); continue; }
       if (stunnedNow.has(unitId)) continue;
       const civ = this.civs.get(u.civ);
-      // 이동력: 기본 3 (+이동 기술 3Lv마다 1). 평지 1, 산지 2, 바다 3 소모
-      let budget = 3 + Math.floor((civ.tech.move || 0) / 3);
-      const steps = []; // 이번 턴에 밟은 헥스 (클라이언트 이동 애니메이션용)
-      while (order.idx < order.path.length) {
+      plans.push({
+        u, order, steps: [],
+        // 이동력: 기본 3 (+이동 기술 3Lv마다 1). 평지 1, 구릉 1.5, 산 2, 고산/바다 3
+        budget: 3 + Math.floor(((civ && civ.tech.move) || 0) / 3),
+        halted: false,
+      });
+    }
+    const enemyAt = (x, y, civId) =>
+      [...this.units.values()].some(o =>
+        o.x === x && o.y === y && o.civ !== civId && !this.isAllied(o.civ, civId));
+    let advanced = true;
+    while (advanced) {
+      advanced = false;
+      for (const p of plans) {
+        if (p.halted) continue;
+        const { u, order } = p;
+        if (order.idx >= order.path.length) { p.halted = true; continue; }
         const [nx, ny] = order.path[order.idx];
         const fortAt = this.forts.get(nx + ',' + ny);
-        if (fortAt && fortAt.civ !== u.civ && !this.isAllied(fortAt.civ, u.civ)) break; // 장성에 막힘 (인접 대기)
+        if (fortAt && fortAt.civ !== u.civ && !this.isAllied(fortAt.civ, u.civ)) { p.halted = true; continue; } // 장성에 막힘 (인접 대기)
         const cost = this.moveCost(nx, ny);
-        if (cost > budget) break;
-        budget -= cost;
+        if (cost > p.budget) { p.halted = true; continue; }
+        p.budget -= cost;
         order.idx++;
         u.x = nx; u.y = ny;
-        steps.push([nx, ny]);
+        p.steps.push([nx, ny]);
         this.claim(nx, ny, u.civ); // 바다는 claim에서 무시됨
         const tr = this.treasures.get(nx + ',' + ny);
         if (tr) {
           this.treasures.delete(nx + ',' + ny);
           treasureEvents.push(this.grantTreasure(u.civ, tr, nx, ny));
         }
+        advanced = true;
+        // 적과 조우 → 이동 중단 (상대가 이동 중이면 상대도 정지)
+        if (enemyAt(nx, ny, u.civ)) {
+          p.halted = true;
+          for (const q of plans) {
+            if (q !== p && !q.halted && q.u.x === nx && q.u.y === ny &&
+                q.u.civ !== u.civ && !this.isAllied(q.u.civ, u.civ)) q.halted = true;
+          }
+        }
       }
-      moves.push({ unitId, x: u.x, y: u.y, steps });
-      if (order.idx >= order.path.length) this.orders.delete(unitId);
+    }
+    for (const p of plans) {
+      moves.push({ unitId: p.u.id, x: p.u.x, y: p.u.y, steps: p.steps });
+      if (p.order.idx >= p.order.path.length) this.orders.delete(p.u.id);
     }
 
     // ② 전투 (사망 없음 — 패자는 수도 후퇴 + 2턴 행동불능)
@@ -755,6 +801,7 @@ class Game {
         for (const u of l.units) {
           const home = this.civs.get(u.civ).capital;
           u.x = home[0]; u.y = home[1];
+          this.orders.delete(u.id);              // 후퇴 → 남은 경로 취소
           u.fatigue = (u.fatigue || 0) + 1;      // 패배 누적 → 행동불능 증가
           u.stunned = 1 + u.fatigue;             // 1패 2턴, 2패 3턴 …
           stuns.push({ unitId: u.id, turns: u.stunned, fatigue: u.fatigue });

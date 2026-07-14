@@ -401,6 +401,48 @@ const unitsOf = (g, id) => [...g.units.values()].filter(u => u.civ === id);
   game.neutrals.clear();
 }
 
+// ── 15.5 고립도 기반 중립 유닛 배치: 상대가 적은 곳에 더 많이
+{
+  const { game, civs } = newGame(2);
+  const [A, B] = civs;
+  const aCiv = game.civs.get(A.id), bCiv = game.civs.get(B.id);
+  // 육지가 있는 서쪽/동쪽 지점을 수도로 지정 (서로 충분히 멀어 고립)
+  const findLand = (x0, x1) => {
+    for (let y = 15; y < world.h - 15; y++)
+      for (let x = x0; x < x1; x++)
+        if (world.isLand(x, y)) return [x, y];
+    return null;
+  };
+  const west = findLand(5, 35), east = findLand(75, 110);
+  aCiv.capital = west; bCiv.capital = east;
+  check(world.hexDistance(west[0], west[1], east[0], east[1]) > 14, '두 수도 고립 상태');
+  game.placeNeutrals('auto');
+  check(game.neutrals.size === 6, `고립 2국 → 각 3마리 (총 ${game.neutrals.size})`);
+  const near = (cap) => [...game.neutrals.values()].filter(
+    n => world.hexDistance(n.x, n.y, cap[0], cap[1]) <= 12).length;
+  check(near(west) >= 2 && near(east) >= 2, `수도 주변 12헥스 이내 배치 (서 ${near(west)} · 동 ${near(east)})`);
+
+  // 상대 1국이 근처 → 각 2마리
+  bCiv.capital = [west[0] + 6, west[1]]; // 거리 ≤ 14
+  game.placeNeutrals('auto');
+  check(game.neutrals.size === 4, `상대 1국 근처 → 각 2마리 (총 ${game.neutrals.size})`);
+}
+{
+  // 밀집 3국 (각자 상대 2국) → 각 1마리
+  const { game, civs } = newGame(3);
+  const findLand2 = (x0, x1) => {
+    for (let y = 15; y < world.h - 15; y++)
+      for (let x = x0; x < x1; x++)
+        if (world.isLand(x, y)) return [x, y];
+    return null;
+  };
+  const base = findLand2(30, 70);
+  let i = 0;
+  for (const c of civs) game.civs.get(c.id).capital = [base[0] + 4 * i++, base[1]];
+  game.placeNeutrals('auto');
+  check(game.neutrals.size === 3, `밀집 3국 → 각 1마리 (총 ${game.neutrals.size})`);
+}
+
 // ── 16. 중립 교전: 강함 = 초기 유닛과 동일 (성장 없음)
 {
   const { game, civs } = newGame(2);

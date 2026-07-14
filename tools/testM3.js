@@ -463,5 +463,52 @@ const key = (h) => h[0] + ',' + h[1];
   check(game.rallyOrder(A.id, ua.id).reason === 'state', '회복 불필요 시 거부');
 }
 
+// ── 14. 이동 중 조우 → 요격 전투
+{
+  const { game, civs } = newGame(2);
+  const [A, B] = civs;
+  // 평지(비용 1)로만 이어진 가로 5칸 찾기
+  let run = null;
+  outer:
+  for (let y = 5; y < world.h - 5; y++) {
+    for (let x = 2; x < world.w - 8; x++) {
+      let ok = true;
+      for (let i = 0; i < 5; i++) if (game.moveCost(x + i, y) !== 1) { ok = false; break; }
+      if (ok) { run = [x, y]; break outer; }
+    }
+  }
+  check(!!run, '평지 5칸 직선 확보');
+  const [rx, ry] = run;
+  const ua = unitsOf(game, A.id)[0], ub = unitsOf(game, B.id)[0];
+
+  // (a) 정면 교차: 서로를 향해 이동 → 중간에서 만나 전투
+  [ua.x, ua.y] = [rx, ry]; [ub.x, ub.y] = [rx + 4, ry];
+  game.orders.set(ua.id, { path: [[rx + 1, ry], [rx + 2, ry], [rx + 3, ry], [rx + 4, ry]], idx: 0 });
+  game.orders.set(ub.id, { path: [[rx + 3, ry], [rx + 2, ry], [rx + 1, ry], [rx, ry]], idx: 0 });
+  const r1 = game.resolveExecution();
+  check(r1.battles.length === 1, '정면 교차 → 요격 전투 발생');
+  check(ua.x === ub.x && ua.y === ub.y, `조우 지점에서 정지 (${ua.x},${ua.y})`);
+  check(ua.stunned === 2 && ub.stunned === 2, '동률 → 양측 행동불능');
+
+  // (b) 주둔지 통과 시도: 정지한 적 위를 지나가는 경로 → 그 자리에서 멈추고 전투
+  const { game: g2, civs: c2 } = newGame(2);
+  const ua2 = unitsOf(g2, c2[0].id)[0], ub2 = unitsOf(g2, c2[1].id)[0];
+  [ua2.x, ua2.y] = [rx, ry]; [ub2.x, ub2.y] = [rx + 2, ry];
+  g2.orders.set(ua2.id, { path: [[rx + 1, ry], [rx + 2, ry], [rx + 3, ry], [rx + 4, ry]], idx: 0 });
+  const r2 = g2.resolveExecution();
+  check(r2.battles.length === 1 && ua2.x === rx + 2, '주둔 적 통과 불가 → 그 헥스에서 전투');
+
+  // (c) 패자는 남은 경로가 취소됨
+  const { game: g3, civs: c3 } = newGame(2);
+  g3.civs.get(c3[1].id).tech.military = 1; // B 우위
+  const ua3 = unitsOf(g3, c3[0].id)[0], ub3 = unitsOf(g3, c3[1].id)[0];
+  [ua3.x, ua3.y] = [rx, ry]; [ub3.x, ub3.y] = [rx + 2, ry];
+  g3.orders.set(ua3.id, { path: [[rx + 1, ry], [rx + 2, ry], [rx + 3, ry], [rx + 4, ry]], idx: 0 });
+  g3.resolveExecution();
+  const cap3 = g3.civs.get(c3[0].id).capital;
+  check(ua3.x === cap3[0] && ua3.y === cap3[1], '요격 패배 → 수도 후퇴');
+  check(!g3.orders.has(ua3.id), '패자의 남은 경로 취소');
+}
+
 console.log(fail === 0 ? '\n모든 테스트 통과' : `\n실패 ${fail}건`);
 process.exit(fail === 0 ? 0 : 1);
