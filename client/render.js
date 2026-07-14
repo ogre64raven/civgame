@@ -103,6 +103,48 @@ const Render = (() => {
     return sp;
   }
 
+  // ── GLB 에셋 (CC0): 파일이 있으면 사용, 없으면(404) 코드 도형으로 폴백
+  const ASSET_PATHS = {
+    unit: 'assets/units/character.glb',
+    wolf: 'assets/neutral/wolf.glb',
+    bear: 'assets/neutral/bear.glb',
+    tiger: 'assets/neutral/tiger.glb',
+    lion: 'assets/neutral/lion.glb',
+    tribe: 'assets/neutral/tribe.glb',
+  };
+  const ASSETS = {}; // key -> { scene, clips }
+  if (THREE.GLTFLoader) {
+    const gltfLoader = new THREE.GLTFLoader();
+    for (const [key, path] of Object.entries(ASSET_PATHS)) {
+      gltfLoader.load(path, (g) => {
+        ASSETS[key] = { scene: g.scene, clips: g.animations || [] };
+        lastSig = ''; // 다음 프레임에 재구축
+      }, undefined, () => {}); // 없으면 조용히 폴백
+    }
+  }
+  function cloneAsset(key, targetH) {
+    const a = ASSETS[key];
+    if (!a) return null;
+    const root = THREE.SkeletonUtils ? THREE.SkeletonUtils.clone(a.scene) : a.scene.clone(true);
+    const box = new THREE.Box3().setFromObject(root);
+    const h = (box.max.y - box.min.y) || 1;
+    root.scale.setScalar(targetH / h);
+    const box2 = new THREE.Box3().setFromObject(root);
+    root.position.y -= box2.min.y; // 발바닥을 지면에
+    return { root, clips: a.clips };
+  }
+  function poseClip(root, clips, names) { // 정지 포즈 적용 (첫 프레임)
+    for (const nm of names) {
+      const clip = THREE.AnimationClip.findByName(clips, nm);
+      if (clip) {
+        const mx = new THREE.AnimationMixer(root);
+        mx.clipAction(clip).play();
+        mx.update(0);
+        return;
+      }
+    }
+  }
+
   // ── 야생동물 모형 (네발짐승)
   const BEAST_COLOR = { wolf: 0x8d99a6, bear: 0x5d3f27, tiger: 0xd97b29, lion: 0xc19a4b };
   function makeBeast(kind) {
@@ -180,6 +222,40 @@ const Render = (() => {
       add(new THREE.Mesh(new THREE.BoxGeometry(3.6, 4, 2.4), mat(0x3b4a33)), 0, H * 0.5, 0);
       add(new THREE.Mesh(new THREE.BoxGeometry(8, 0.7, 0.7), mat(0x1c1f24)), 0.8, H * 0.52, 1.6);
     }
+    return g;
+  }
+
+  // GLB 유닛: 문명색 틴트 + 군사 레벨 무기는 도형으로 표시. 없으면 makeFigure 폴백
+  function makeUnitFigure(colorHex, mil) {
+    const a = cloneAsset('unit', 10);
+    if (!a) return makeFigure(colorHex, mil);
+    const g = new THREE.Group();
+    const tint = new THREE.Color(colorHex);
+    a.root.traverse(o => {
+      if (o.isMesh && o.material) {
+        o.material = o.material.clone();
+        o.material.color = o.material.color.clone().lerp(tint, 0.6);
+      }
+    });
+    poseClip(a.root, a.clips, ['idle', 'static']);
+    g.add(a.root);
+    g.userData.animRoot = a.root;
+    g.userData.clips = a.clips;
+    // 군사 레벨 무기 (기존 도형 재사용을 위해 미니 피규어에서 무기만 발췌)
+    const gear = makeFigure(colorHex, mil);
+    const keep = [];
+    gear.traverse(o => { if (o.isMesh) keep.push(o); });
+    // 몸통(앞 4+α개)을 제외한 무기·장비 메시만 부착: makeFigure는 몸통 4개 뒤에 장비 추가
+    for (const m of keep.slice(4)) { g.add(m.clone()); }
+    return g;
+  }
+  // 중립 유닛: GLB 있으면 사용 (부족/동물 공용)
+  function makeNeutralFigure(kind) {
+    const a = cloneAsset(kind, kind === 'tribe' ? 10 : 8);
+    if (!a) return kind === 'tribe' ? makeFigure('#a1876b', 0) : makeBeast(kind);
+    poseClip(a.root, a.clips, ['Idle', 'idle', 'static']);
+    const g = new THREE.Group();
+    g.add(a.root);
     return g;
   }
 
@@ -645,7 +721,7 @@ const Render = (() => {
       if (!isVis(n.x, n.y)) continue;
       const [wx, wz] = worldPos(n.x, n.y);
       const ty = topY(map.rows[n.y][n.x]);
-      const fig = n.kind === 'tribe' ? makeFigure('#a1876b', 0) : makeBeast(n.kind);
+      const fig = makeNeutralFigure(n.kind);
       fig.position.set(wx - HEX * 0.25, ty, wz - HEX * 0.2);
       if (n.stunned > 0) fig.traverse(o => { if (o.material) { o.material = o.material.clone(); o.material.transparent = true; o.material.opacity = 0.45; } });
       dynamicGroup.add(fig);
@@ -663,7 +739,7 @@ const Render = (() => {
       if (!isVis(u.x, u.y)) continue; // 도착 헥스 기준 가시성
       const civ = state.civs.get(u.civ);
       if (!civ) continue;
-      const fig = makeFigure(civ.color, (civ.tech && civ.tech.military) || 0);
+      const fig = makeUnitFigure(civ.color, (civ.tech && civ.tech.military) || 0);
       const pin = pinSprite(civ.color);
       const code = textSprite(civ.code, '#e2e8f0', 5);
       dynamicGroup.add(fig, pin, code);
@@ -671,7 +747,15 @@ const Render = (() => {
       fig.position.set(px, py, pz);
       pin.position.set(px, py + 10.5, pz);
       code.position.set(px, py + 14, pz);
-      animMeshes.set(uid, { fig, pin, code });
+      // 걷기 클립이 있으면 재생 (GLB)
+      let mixer = null;
+      const clips = fig.userData.clips || [];
+      const walk = THREE.AnimationClip.findByName(clips, 'walk') || THREE.AnimationClip.findByName(clips, 'Walk');
+      if (walk) {
+        mixer = new THREE.AnimationMixer(fig.userData.animRoot || fig);
+        mixer.clipAction(walk).play();
+      }
+      animMeshes.set(uid, { fig, pin, code, mixer });
     }
 
     // 유닛 스택
@@ -702,7 +786,7 @@ const Render = (() => {
         const civ = state.civs.get(civId);
         if (!civ) { gi++; continue; }
         const gx = wx + (gi - (n - 1) / 2) * HEX * 0.75;
-        const fig = makeFigure(civ.color, (civ.tech && civ.tech.military) || 0);
+        const fig = makeUnitFigure(civ.color, (civ.tech && civ.tech.military) || 0);
         fig.position.set(gx, ty, wzU);
         const allStunned = group.every(u => u.stunned > 0);
         if (allStunned) fig.traverse(o => { if (o.material) { o.material = o.material.clone(); o.material.transparent = true; o.material.opacity = 0.45; } });
@@ -755,8 +839,8 @@ const Render = (() => {
     };
     const L = info(fx.winners[0]);
     const R = info(fx.draw ? (fx.winners[1] != null ? fx.winners[1] : fx.winners[0]) : fx.losers[0]);
-    fx.figL = makeFigure(L.color, L.mil);
-    fx.figR = makeFigure(R.color, R.mil);
+    fx.figL = makeUnitFigure(L.color, L.mil);
+    fx.figR = makeUnitFigure(R.color, R.mil);
     fx.figR.rotation.y = Math.PI;
     g.add(fx.figL, fx.figR);
     fx.spark = textSprite('✦', '#ffe066', 10);
@@ -902,19 +986,22 @@ const Render = (() => {
 
     // 이동 애니메이션 갱신
     if (state.unitAnims && state.unitAnims.size) {
+      const dt = Math.min(0.05, (now - (draw._t || now)) / 1000);
       for (const [uid, anim] of state.unitAnims) {
         if (now >= anim.end) { state.unitAnims.delete(uid); continue; } // 만료 → sig 변화로 rebuild
         const m = animMeshes.get(uid);
         if (!m) continue;
+        if (m.mixer) m.mixer.update(dt);
         const f = (now - anim.start) / (anim.end - anim.start);
         const [px, py, pz] = animWorldPos(state.map, anim.steps, f);
-        const bob = Math.abs(Math.sin(now / 130)) * 0.9; // 걷는 들썩임
+        const bob = m.mixer ? 0 : Math.abs(Math.sin(now / 130)) * 0.9; // 걷는 들썩임(GLB는 자체 애니)
         m.fig.position.set(px, py + bob, pz);
         m.pin.position.set(px, py + 10.5, pz);
         m.code.position.set(px, py + 14, pz);
       }
     }
 
+    draw._t = now;
     animateFx(state, visionCache);
     if (cloudMesh) cloudMesh.position.y = Math.sin(now / 1600) * 1.4;
     updateCamera();

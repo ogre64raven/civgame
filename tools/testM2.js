@@ -70,8 +70,16 @@ const check = (cond, label) => {
 
     const exec1 = await A.next(m => m.type === 'exec' && m.moves.some(v => v.unitId === u.id), 10000);
     const mv1 = exec1.moves.find(v => v.unitId === u.id);
-    const expected = ack.path[Math.min(2, ack.path.length) - 1]; // 기본 이동력 2
-    check(mv1.x === expected[0] && mv1.y === expected[1], `실행 턴 이동력 2 (${mv1.x},${mv1.y})`);
+    // 이동 예산 3 + 지형 비용(평지1·구릉1.5·산2·고산/바다3) 시뮬레이션으로 기대 위치 계산
+    const costOf = (x, y) => { const t = world.terrain(x, y); return (t === '~' || t === 'M') ? 3 : t === 'm' ? 2 : t === 'h' ? 1.5 : 1; };
+    let mvBudget = 3, mvIdx = -1;
+    for (let i = 0; i < ack.path.length; i++) {
+      const c = costOf(ack.path[i][0], ack.path[i][1]);
+      if (c > mvBudget) break;
+      mvBudget -= c; mvIdx = i;
+    }
+    const expected = mvIdx >= 0 ? ack.path[mvIdx] : [u.x, u.y];
+    check(mv1.x === expected[0] && mv1.y === expected[1], `실행 턴 이동 예산 3 (${mv1.x},${mv1.y})`);
 
     const execB = await B.next(m => m.type === 'exec' && m.moves.some(v => v.unitId === u.id), 10000);
     check(!!execB, '상대 클라이언트도 이동 수신');
