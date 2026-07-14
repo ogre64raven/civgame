@@ -52,6 +52,7 @@
       <span class="stat">페이즈 <b id="stPhase">-</b></span>
       <span class="stat">참가 <b id="stPlayers">-</b></span>
       <span class="stat">관전 <b id="stSpect">-</b></span>
+      <span class="stat">방 번호 <b id="stRoom">-</b></span>
     </div>
     <div class="row">
       <button id="startBtn" class="green">게임 시작</button>
@@ -73,6 +74,12 @@
   </div>
 
   <div class="card">
+    <h2>접속 QR — 스캔하면 방 번호가 채워진 입장 페이지가 열립니다</h2>
+    <div id="qrBox" style="background:#fff;display:inline-block;padding:8px;border-radius:8px;min-width:120px;min-height:120px"></div>
+    <div id="qrUrl" style="font-size:12.5px;color:#94a3b8;margin-top:8px"></div>
+  </div>
+
+  <div class="card">
     <h2>플레이어</h2>
     <table>
       <thead><tr><th>국가</th><th>플레이어</th><th>유닛</th><th>점수</th><th>상태</th><th></th></tr></thead>
@@ -81,6 +88,7 @@
   </div>
 </div>
 
+<script src="vendor/qrcode.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
 let PASS = sessionStorage.getItem('adminPass') || '';
@@ -110,12 +118,30 @@ async function login() {
   }
 }
 
+let lastRoom = '';
+function renderRoom(room) {
+  if (!room || room === lastRoom) return;
+  lastRoom = room;
+  $('stRoom').textContent = room;
+  const url = location.origin + '/?room=' + encodeURIComponent(room);
+  try {
+    const qr = qrcode(0, 'M');
+    qr.addData(url);
+    qr.make();
+    $('qrBox').innerHTML = qr.createImgTag(5, 8);
+  } catch (e) {
+    $('qrBox').textContent = 'QR 생성 실패';
+  }
+  $('qrUrl').textContent = url;
+}
+
 let settingsLoaded = false;
 async function poll() {
   let s;
   try { s = await api('GET', '/api/admin/state'); }
   catch { clearInterval(pollTimer); $('panel').style.display = 'none'; $('loginCard').style.display = ''; return; }
 
+  renderRoom(s.room);
   $('stState').textContent = s.state;
   $('stState').className = 'state-' + s.state;
   $('stTurn').textContent = s.turn + '/' + s.settings.turnLimit;

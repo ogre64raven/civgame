@@ -142,6 +142,20 @@ const check = (cond, label) => {
 
     let st = (await admin(PORT, 'GET', 'state')).body;
     check(st.state === 'LOBBY' && st.playerCount === 2, `관리자 상태 조회 (로비, ${st.playerCount}명)`);
+    check(st.room === '1111', `관리자 상태에 방 번호 (${st.room})`);
+    check(A.welcome.room === '1111', '환영 메시지에 방 번호');
+
+    // 잘못된 방 번호 → 입장 거부
+    const W = new Client('오방', PORT, '9999');
+    const wrongJoin = new Promise((resolve, reject) => {
+      W.ws = new (require('ws'))(`ws://localhost:${PORT}`);
+      W.ws.on('open', () => W.ws.send(JSON.stringify({ type: 'join', name: '오방', room: '9999' })));
+      W.ws.on('message', (raw) => resolve(JSON.parse(raw)));
+      setTimeout(() => reject(new Error('timeout')), 5000);
+    });
+    const wr = await wrongJoin;
+    check(wr.type === 'joinRejected' && wr.reason === 'room', '잘못된 방 번호 → 입장 거부');
+    W.ws.close();
 
     // ── 3. 설정 변경
     const set = await admin(PORT, 'POST', 'settings', { meetingMs: 7000, execMs: 3000, turnLimit: 50 });

@@ -74,6 +74,7 @@ function makeGame() {
 // ── 관리자 API
 function adminState() {
   return {
+    room: game.room,
     state: game.state, phase: game.phase, turn: game.turn,
     endsAt: game.phaseEnds, settings: game.settings,
     playerCount: game.civs.size,
@@ -199,6 +200,11 @@ wss.on('connection', (ws) => {
 
     switch (msg.type) {
       case 'join': {
+        // 방 번호 검증 (재접속 토큰이 유효하면 생략)
+        if (!(msg.token && game.tokens.has(msg.token)) && String(msg.room || '') !== game.room) {
+          sendTo(ws, { type: 'joinRejected', reason: 'room' });
+          return;
+        }
         const r = game.join(msg.token, msg.name);
         if (r.spectator) {
           sendTo(ws, { type: 'welcome', spectator: true, map: world.toJSON(), ...game.snapshot() });
@@ -208,6 +214,7 @@ wss.on('connection', (ws) => {
         sendTo(ws, {
           type: 'welcome',
           you: r.civ.id,
+          room: game.room,
           token: r.civ.token,
           map: world.toJSON(),
           resources: r.civ.resources,

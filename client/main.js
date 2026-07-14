@@ -63,12 +63,12 @@
     return n;
   };
 
-  function connect(name) {
+  function connect(name, room) {
     const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
     ws = new WebSocket(proto + location.host);
     ws.onopen = () => {
       if (spectatePass != null) ws.send(JSON.stringify({ type: 'spectate', pass: spectatePass }));
-      else ws.send(JSON.stringify({ type: 'join', name, token: sessionStorage.getItem('civToken') || undefined }));
+      else ws.send(JSON.stringify({ type: 'join', name, room, token: sessionStorage.getItem('civToken') || undefined }));
     };
     ws.onmessage = (e) => handle(JSON.parse(e.data));
     ws.onclose = () => {
@@ -118,6 +118,7 @@
         if (msg.resources) state.resources = msg.resources;
         state.myOrders = new Map((msg.orders || []).map(o => [o.unitId, o.path]));
 
+        if (msg.room) $('lobbyRoom').textContent = '· 방 ' + msg.room;
         $('joinOverlay').style.display = 'none';
         $('phaseHud').style.display = '';
         $('playersHud').style.display = '';
@@ -169,6 +170,11 @@
         for (const [k, v] of [...state.territory]) if (v === msg.civId) state.territory.delete(k);
         if (c) toast(`${c.name}이(가) 서버에서 제외되었습니다`);
         renderPlayers();
+        break;
+      }
+      case 'joinRejected': {
+        $('joinMsg').textContent = msg.reason === 'room' ? '방 번호가 올바르지 않습니다' : '입장할 수 없습니다';
+        $('joinOverlay').style.display = 'flex';
         break;
       }
       case 'spectateRejected': {
@@ -864,11 +870,15 @@
     }
   }
 
+  $('roomInput').value = new URLSearchParams(location.search).get('room') || '';
   $('joinBtn').addEventListener('click', () => {
     const name = $('nameInput').value.trim();
     if (!name) { $('joinMsg').textContent = '이름을 입력하세요'; return; }
+    const room = $('roomInput').value.trim();
+    if (!room && !sessionStorage.getItem('civToken')) { $('joinMsg').textContent = '방 번호를 입력하세요'; return; }
     $('joinMsg').textContent = '';
-    connect(name);
+    if (ws && ws.readyState === 1) send({ type: 'join', name, room, token: sessionStorage.getItem('civToken') || undefined });
+    else connect(name, room);
   });
   $('nameInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('joinBtn').click(); });
 

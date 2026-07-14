@@ -138,7 +138,7 @@
 </div>
 
 <div id="lobbyHud" class="hud" style="display:none">
-  <h2>로비 대기 중</h2>
+  <h2>로비 대기 중 <span id="lobbyRoom" style="color:#e2e8f0"></span></h2>
   <p>관리자가 게임을 시작하면 수도에 유닛 3기가 배치됩니다.<br>유닛이 지나간 땅은 영토가 되고, 영토가 자원을 생산합니다.</p>
 </div>
 
@@ -174,6 +174,7 @@
     <h1>온라인 문명</h1>
     <p>UN 회원국 중 한 나라가 랜덤으로 배정됩니다</p>
     <input id="nameInput" maxlength="20" placeholder="플레이어 이름" autofocus>
+    <input id="roomInput" maxlength="6" placeholder="방 번호" style="width:240px;margin-top:8px;padding:10px 12px;font-size:15px;background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:8px;outline:none;text-align:center">
     <button id="joinBtn">입장</button>
     <div id="joinMsg"></div>
   </div>

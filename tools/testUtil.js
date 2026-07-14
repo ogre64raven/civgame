@@ -4,11 +4,12 @@ const path = require('path');
 const WebSocket = require('ws');
 
 const ADMIN_PASS = 'testpass';
+const ROOM = '1111'; // 테스트 고정 방 번호
 
 function startServer(port, env = {}) {
   return new Promise((resolve, reject) => {
     const proc = spawn(process.execPath, [path.join(__dirname, '../server/index.js')], {
-      env: { ...process.env, PORT: port, ADMIN_PASSWORD: ADMIN_PASS, ...env },
+      env: { ...process.env, PORT: port, ADMIN_PASSWORD: ADMIN_PASS, ROOM, ...env },
     });
     proc.stdout.on('data', (d) => { if (String(d).includes('가동')) resolve(proc); });
     proc.stderr.on('data', (d) => console.error('서버 오류:', String(d)));
@@ -27,11 +28,11 @@ async function admin(port, method, ep, body, pass = ADMIN_PASS) {
 }
 
 class Client {
-  constructor(name, port) { this.name = name; this.port = port; this.inbox = []; this.waiters = []; }
+  constructor(name, port, room = ROOM) { this.name = name; this.port = port; this.room = room; this.inbox = []; this.waiters = []; }
   connect() {
     return new Promise((resolve, reject) => {
       this.ws = new WebSocket(`ws://localhost:${this.port}`);
-      this.ws.on('open', () => this.ws.send(JSON.stringify({ type: 'join', name: this.name })));
+      this.ws.on('open', () => this.ws.send(JSON.stringify({ type: 'join', name: this.name, room: this.room })));
       this.ws.on('message', (raw) => {
         const m = JSON.parse(raw);
         if (m.type === 'welcome') { this.welcome = m; resolve(m); }
@@ -56,4 +57,4 @@ class Client {
 
 const wait = (ms) => new Promise(r => setTimeout(r, ms));
 
-module.exports = { startServer, admin, Client, wait, ADMIN_PASS };
+module.exports = { startServer, admin, Client, wait, ADMIN_PASS, ROOM };

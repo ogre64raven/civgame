@@ -48,6 +48,7 @@ class Game {
       execMs: settings.execMs ?? parseInt(process.env.PHASE_EXEC_MS || '10000', 10),
       turnLimit: settings.turnLimit ?? parseInt(process.env.TURN_LIMIT || '120', 10),
     };
+    this.room = process.env.ROOM || String(crypto.randomInt(1000, 10000)); // 방 번호
     this.state = 'LOBBY';               // LOBBY → RUNNING → ENDED
     this.civs = new Map();
     this.tokens = new Map();
