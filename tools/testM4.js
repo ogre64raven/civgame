@@ -29,36 +29,36 @@ function newGame(n) {
 }
 const unitsOf = (g, id) => [...g.units.values()].filter(u => u.civ === id);
 
-// ── 1. 연구 (비용 20×레벨)
+// ── 1. 연구 (비용 40×레벨)
 {
   const { game, civs } = newGame(1);
   const A = game.civs.get(civs[0].id);
-  A.resources.iron = 20;
+  A.resources.iron = 40;
   const r0 = game.researchOrder(A.id, 'military');
-  check(r0.ok && r0.cost === 20 && r0.res === 'iron', `군사 연구 예약 (철 ${r0.cost})`);
+  check(r0.ok && r0.cost === 40 && r0.res === 'iron', `군사 연구 예약 (철 ${r0.cost})`);
   game.resolveExecution();
   check(A.tech.military === 1, '군사 Lv1 완료');
 
-  A.resources.grain = 20;
+  A.resources.grain = 40;
   const rd = game.researchOrder(A.id, 'defense');
   check(rd.ok && rd.res === 'grain', '인구 연구는 곡식 소모');
   game.resolveExecution();
   check(A.tech.defense === 1, '방어 Lv1 완료');
 
-  A.resources.iron = 30;
+  A.resources.iron = 70;
   game.researchOrder(A.id, 'military');
   const r2 = game.resolveExecution();
-  check(r2.researchFails.some(f => f.reason === 'cost'), 'Lv2 비용(40) 부족 실패');
+  check(r2.researchFails.some(f => f.reason === 'cost'), 'Lv2 비용(80) 부족 실패');
   A.tech.gather = 5;
   check(game.researchOrder(A.id, 'gather').reason === 'max', '최고 레벨 거부');
 
   // 군사는 7레벨(근미래 6, 미래 7)까지
   A.tech.military = 5;
-  A.resources.iron = 120;
+  A.resources.iron = 240;
   check(game.researchOrder(A.id, 'military').ok === true, '군사 Lv6(근미래) 연구 가능');
   game.resolveExecution();
   check(A.tech.military === 6, '군사 Lv6 완료');
-  A.resources.iron = 140;
+  A.resources.iron = 280;
   game.researchOrder(A.id, 'military');
   game.resolveExecution();
   check(A.tech.military === 7, '군사 Lv7(미래) 완료');
@@ -300,7 +300,7 @@ const unitsOf = (g, id) => [...g.units.values()].filter(u => u.civ === id);
   game.moveOrder(A.id, u.id, nb);
   const r = game.resolveExecution();
   check(r.treasures.length === 1 && r.treasures[0].kind === 'res', '자원 상자 습득 이벤트');
-  check(A.resources.iron >= before + 20, `모든 자원 +20 (철 ${A.resources.iron})`);
+  check(A.resources.iron >= before + 60, `모든 자원 +60 (철 ${A.resources.iron})`);
   check(game.treasures.size === 0, '습득한 상자는 제거');
 
   // 기술 상자: 선택 대기 → 선택 적용

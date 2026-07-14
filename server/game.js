@@ -12,7 +12,7 @@ const TECH_MAX = 5;
 const TECH_MAX_MIL = 7;                 // 군사는 근미래(6)·미래(7)까지
 const techMaxOf = (branch) => (branch === 'military' ? TECH_MAX_MIL : TECH_MAX);
 const TECH_RES = { military: 'iron', defense: 'grain', gather: 'wood', move: 'stone' };
-const techCost = (targetLevel) => 20 * targetLevel;
+const techCost = (targetLevel) => 40 * targetLevel; // 연구 비용 40×목표레벨
 const ALLY_MAX = 3;                     // 동맹 그룹 최대 인원
 const ABSORB_RATIO = 0.8;               // 8:2 초과
 const ABSORB_TURNS = 3;                 // 연속 유지 턴
@@ -389,7 +389,7 @@ class Game {
       }
     }
     if (kind === 'res') {
-      for (const r2 of ['stone', 'grain', 'wood', 'iron']) civ.resources[r2] += 20;
+      for (const r2 of ['stone', 'grain', 'wood', 'iron']) civ.resources[r2] += 60;
       ev.kind = 'res';
     }
     return ev;

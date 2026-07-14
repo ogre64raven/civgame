@@ -82,7 +82,7 @@ const check = (cond, label) => {
   g.startGame();
   clearTimeout(g.timer);
   const bot = g.civs.get(rb.civ.id);
-  bot.resources.iron = 20;
+  bot.resources.iron = 40;
   runBots(g);
   check(g.researchOrders.get(bot.id) != null, '봇 자동 연구 예약');
   check(g.ordersOf(bot.id).length >= 1, '봇 자동 이동 명령');

@@ -5,7 +5,7 @@
 //       군사 우위일 때만 적 수도 공성, 동맹 제안은 수락·동의 요청은 승인.
 const TECH_RES = { military: 'iron', defense: 'grain', gather: 'wood', move: 'stone' };
 const BRANCHES = ['military', 'defense', 'gather', 'move'];
-const techCost = (targetLevel) => 20 * targetLevel;
+const techCost = (targetLevel) => 40 * targetLevel;
 
 function runBots(game) {
   if (game.state !== 'RUNNING' || game.phase !== 'MEETING') return { formed: [] };

@@ -278,7 +278,7 @@
             if (c2) c2.tech[ev.branch] = ev.level;
           }
           if (ev.by === state.you) {
-            toast(ev.kind === 'res' ? '보물상자 발견! 모든 자원 +20' : '보물상자 발견! 기술 계통을 선택하세요');
+            toast(ev.kind === 'res' ? '보물상자 발견! 모든 자원 +60' : '보물상자 발견! 기술 계통을 선택하세요');
           } else {
             toast(`${civName(ev.by)}이(가) 보물상자를 발견했습니다`);
           }
@@ -658,7 +658,7 @@
       const maxed = lvl >= (br === 'military' ? 7 : 5);
       btn.textContent = maxed
         ? `${TECH_KO[br]} Lv${lvl} (최고)`
-        : `${TECH_KO[br]} Lv${lvl} → ${lvl + 1} (${TECH_RES_KO[br]} ${20 * (lvl + 1)}) — ${TECH_DESC[br]}`;
+        : `${TECH_KO[br]} Lv${lvl} → ${lvl + 1} (${TECH_RES_KO[br]} ${40 * (lvl + 1)}) — ${TECH_DESC[br]}`;
       btn.disabled = maxed || !me.alive || state.spectator || lobby;
       btn.classList.toggle('queued', state.queuedResearch === br);
     }

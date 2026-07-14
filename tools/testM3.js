@@ -446,7 +446,7 @@ const key = (h) => h[0] + ',' + h[1];
   check(ua.stunned === 3 && ua.fatigue === 2, '2패 → 행동불능 3턴 (누적 2)');
 
   const aCiv = game.civs.get(A.id);
-  aCiv.resources.iron = 20;
+  aCiv.resources.iron = 40;
   game.researchOrder(A.id, 'military');
   game.resolveExecution();
   check(ua.fatigue === 0, '군사 기술 향상 → 누적 리셋');
