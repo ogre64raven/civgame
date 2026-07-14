@@ -224,10 +224,25 @@ const Render = (() => {
       add(new THREE.Mesh(new THREE.CylinderGeometry(2.6, 2.6, 0.4, 10), mat(0x2f3b4c)), 0, H * 0.9, 0);
       add(new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.2, 1.4, 10), mat(0x2f3b4c)), 0, H * 0.98, 0);
       add(new THREE.Mesh(new THREE.BoxGeometry(0.55, 11, 0.55), mat(0x5b4636)), 2.7, H * 0.6, 0, 0.35);
-    } else { // 현대군: 방탄모 + 방탄복 + 소총
+    } else if (mil === 5) { // 현대군: 방탄모 + 방탄복 + 소총
       add(new THREE.Mesh(new THREE.SphereGeometry(1.95, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2), mat(0x4a5d3a)), 0, H * 0.82, 0);
       add(new THREE.Mesh(new THREE.BoxGeometry(3.6, 4, 2.4), mat(0x3b4a33)), 0, H * 0.5, 0);
       add(new THREE.Mesh(new THREE.BoxGeometry(8, 0.7, 0.7), mat(0x1c1f24)), 0.8, H * 0.52, 1.6);
+    } else if (mil === 6) { // 근미래군: 강화 외골격 + 청색 바이저 + 전자소총
+      add(new THREE.Mesh(new THREE.SphereGeometry(2, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2), mat(0x2b3442)), 0, H * 0.82, 0);
+      add(new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.8, 0.4), new THREE.MeshLambertMaterial({ color: 0x22d3ee, emissive: 0x0e7490 })), 0, H * 0.84, 1.6);
+      add(new THREE.Mesh(new THREE.BoxGeometry(4, 4.4, 2.6), mat(0x374357)), 0, H * 0.5, 0);
+      for (const sSh of [-1, 1]) add(new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.6, 2.2), mat(0x4b5a75)), sSh * 2.4, H * 0.68, 0);
+      add(new THREE.Mesh(new THREE.BoxGeometry(7.5, 0.9, 0.9), new THREE.MeshLambertMaterial({ color: 0x1c2430, emissive: 0x155e75 })), 0.8, H * 0.52, 1.7);
+    } else { // 미래군: 백은 전신갑주 + 발광 코어 + 플라스마 라이플
+      add(new THREE.Mesh(new THREE.SphereGeometry(2.05, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2), mat(0xd8dee9)), 0, H * 0.82, 0);
+      add(new THREE.Mesh(new THREE.BoxGeometry(3, 0.7, 0.4), new THREE.MeshLambertMaterial({ color: 0x67e8f9, emissive: 0x06b6d4 })), 0, H * 0.85, 1.7);
+      add(new THREE.Mesh(new THREE.BoxGeometry(4.2, 4.6, 2.8), mat(0xc3ccd9)), 0, H * 0.5, 0);
+      add(new THREE.Mesh(new THREE.SphereGeometry(0.9, 8, 6), new THREE.MeshLambertMaterial({ color: 0x67e8f9, emissive: 0x0891b2 })), 0, H * 0.56, 1.5);
+      for (const sSh of [-1, 1]) add(new THREE.Mesh(new THREE.SphereGeometry(1.3, 8, 6), mat(0xaab6c8)), sSh * 2.5, H * 0.7, 0);
+      const gun = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.7, 8, 6), new THREE.MeshLambertMaterial({ color: 0x94a3b8, emissive: 0x164e63 }));
+      add(gun, 0.8, H * 0.52, 1.8, Math.PI / 2 * 0.98);
+      add(new THREE.Mesh(new THREE.SphereGeometry(0.8, 8, 6), new THREE.MeshLambertMaterial({ color: 0x22d3ee, emissive: 0x22d3ee })), 0.8, H * 0.52 + 4, 1.8);
     }
     return g;
   }

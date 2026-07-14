@@ -33,7 +33,7 @@ function botResearch(game, civ) {
   let best = null;
   for (const br of BRANCHES) {
     const lvl = civ.tech[br];
-    if (lvl >= 5) continue;
+    if (lvl >= (br === 'military' ? 7 : 5)) continue;
     if (civ.resources[TECH_RES[br]] < techCost(lvl + 1)) continue;
     if (best === null || lvl < civ.tech[best]) best = br;
   }

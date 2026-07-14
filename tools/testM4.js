@@ -51,6 +51,18 @@ const unitsOf = (g, id) => [...g.units.values()].filter(u => u.civ === id);
   check(r2.researchFails.some(f => f.reason === 'cost'), 'Lv2 비용(40) 부족 실패');
   A.tech.gather = 5;
   check(game.researchOrder(A.id, 'gather').reason === 'max', '최고 레벨 거부');
+
+  // 군사는 7레벨(근미래 6, 미래 7)까지
+  A.tech.military = 5;
+  A.resources.iron = 120;
+  check(game.researchOrder(A.id, 'military').ok === true, '군사 Lv6(근미래) 연구 가능');
+  game.resolveExecution();
+  check(A.tech.military === 6, '군사 Lv6 완료');
+  A.resources.iron = 140;
+  game.researchOrder(A.id, 'military');
+  game.resolveExecution();
+  check(A.tech.military === 7, '군사 Lv7(미래) 완료');
+  check(game.researchOrder(A.id, 'military').reason === 'max', '군사 Lv7 이후 거부');
 }
 
 // ── 2. 동맹 성립/파기
@@ -440,6 +452,43 @@ const unitsOf = (g, id) => [...g.units.values()].filter(u => u.civ === id);
   for (const c of civs) game.civs.get(c.id).capital = [base[0] + 4 * i++, base[1]];
   game.placeNeutrals('auto');
   check(game.neutrals.size === 9, `밀집 3국 → 각 3마리 (총 ${game.neutrals.size})`);
+}
+
+// ── 15.7 이동 경로 위의 중립 유닛: 지나치지 못하고 그 자리에서 교전
+{
+  const { game, civs } = newGame(2);
+  const [A] = civs;
+  // 평지(비용 1) 가로 5칸 직선
+  let run = null;
+  outer:
+  for (let y = 5; y < world.h - 5; y++) {
+    for (let x = 2; x < world.w - 8; x++) {
+      let ok = true;
+      for (let i = 0; i < 5; i++) if (game.moveCost(x + i, y) !== 1) { ok = false; break; }
+      if (ok) { run = [x, y]; break outer; }
+    }
+  }
+  const [rx, ry] = run;
+  const ua = unitsOf(game, A.id)[0];
+  [ua.x, ua.y] = [rx, ry];
+  const bear = game.spawnNeutralAt('bear', rx + 2, ry);
+  game.orders.set(ua.id, { path: [[rx + 1, ry], [rx + 2, ry], [rx + 3, ry], [rx + 4, ry]], idx: 0 });
+  let r = game.resolveExecution();
+  check(ua.x === rx + 2 && ua.y === ry, `곰 헥스에서 정지 (${ua.x},${ua.y})`);
+  check(bear.x === rx + 2 && bear.y === ry, '곰은 도망가지 않음');
+  check(ua.stunned === 2 && bear.stunned === 2, '군사 0 → 동률 교전, 양측 행동불능');
+  check(r.neutralEvents.some(e => e.type === 'clash'), 'clash 이벤트');
+  check(game.orders.has(ua.id), '남은 경로 유지 (회복 후 계속)');
+
+  // 군사 1이면 정지 후 즉시 처치, 다음 턴 경로 재개
+  ua.stunned = 0; bear.stunned = 0;
+  game.civs.get(A.id).tech.military = 1;
+  [ua.x, ua.y] = [rx, ry];
+  game.orders.set(ua.id, { path: [[rx + 1, ry], [rx + 2, ry], [rx + 3, ry], [rx + 4, ry]], idx: 0 });
+  r = game.resolveExecution();
+  check(ua.x === rx + 2 && !game.neutrals.has(bear.id), '군사 우위 → 정지 헥스에서 곰 처치');
+  game.resolveExecution();
+  check(ua.x === rx + 4, '다음 턴 경로 재개 → 목적지 도달');
 }
 
 // ── 16. 중립 교전: 강함 = 초기 유닛과 동일 (성장 없음)

@@ -9,6 +9,8 @@ const SPAWN_COST = 10;                  // 유닛 생산 비용 (고기·곡식 
 const FORT_COST = 10;                   // 요새 건설 비용 (돌·목재 각각)
 const RALLY_COST = 10;                  // 유닛 회복(사기 진작) 비용 (곡식)
 const TECH_MAX = 5;
+const TECH_MAX_MIL = 7;                 // 군사는 근미래(6)·미래(7)까지
+const techMaxOf = (branch) => (branch === 'military' ? TECH_MAX_MIL : TECH_MAX);
 const TECH_RES = { military: 'iron', defense: 'grain', gather: 'wood', move: 'stone' };
 const techCost = (targetLevel) => 20 * targetLevel;
 const ALLY_MAX = 3;                     // 동맹 그룹 최대 인원
@@ -312,6 +314,8 @@ class Game {
     const stunnedNowN = new Set();
     for (const n of this.neutrals.values()) {
       if (n.stunned > 0) { stunnedNowN.add(n.id); n.stunned--; continue; }
+      // 같은 헥스에 문명 유닛이 있으면 도망가지 않고 교전
+      if ([...this.units.values()].some(u2 => u2.x === n.x && u2.y === n.y)) continue;
       const opts = this.world.neighbors(n.x, n.y).filter(([x, y]) => {
         if (!this.world.isLand(x, y)) return false;
         if (this.forts.has(x + ',' + y)) return false; // 장성 통과 불가
@@ -370,7 +374,7 @@ class Game {
     if (!civ) return ev;
     let kind = tr.kind;
     if (kind === 'tech') {
-      const openBranch = ['military', 'defense', 'gather', 'move'].filter(b => civ.tech[b] < TECH_MAX);
+      const openBranch = ['military', 'defense', 'gather', 'move'].filter(b => civ.tech[b] < techMaxOf(b));
       if (openBranch.length === 0) kind = 'res'; // 전부 만렙이면 자원으로 대체
       else if (civ.isBot) {
         let best = openBranch[0];
@@ -397,7 +401,7 @@ class Game {
     if (n <= 0) return { ok: false, reason: 'notreasure' };
     const civ = this.civs.get(civId);
     if (!civ || !(branch in TECH_RES)) return { ok: false, reason: 'branch' };
-    if (civ.tech[branch] >= TECH_MAX) return { ok: false, reason: 'max' };
+    if (civ.tech[branch] >= techMaxOf(branch)) return { ok: false, reason: 'max' };
     civ.tech[branch]++;
     if (branch === 'military') this.resetFatigue(civId);
     if (n === 1) this.pendingTechChoices.delete(civId);
@@ -525,6 +529,8 @@ class Game {
             if (q !== p && !q.halted && q.u.x === nx && q.u.y === ny &&
                 q.u.civ !== u.civ && !this.isAllied(q.u.civ, u.civ)) q.halted = true;
           }
+        } else if ([...this.neutrals.values()].some(n2 => n2.x === nx && n2.y === ny)) {
+          p.halted = true; // 야생동물·부족과 조우 → 정지 후 교전 (지나치기 불가)
         }
       }
     }
@@ -613,7 +619,7 @@ class Game {
       if (attackers.size === 0) {
         if (civ.capitalHp < max) {
           // 회복량 = 기본 1 + 최대 레벨(5) 도달 계통 수
-          const regen = 1 + Object.values(civ.tech).filter(l => l >= TECH_MAX).length;
+          const regen = 1 + Object.entries(civ.tech).filter(([b, l]) => l >= techMaxOf(b)).length;
           civ.capitalHp = Math.min(max, civ.capitalHp + regen);
           capitalHits.push({ civId: civ.id, hp: civ.capitalHp, max });
         }
@@ -636,7 +642,7 @@ class Game {
       const civ = this.civs.get(civId);
       if (!civ || !civ.alive) { researchFails.push({ civId, reason: 'dead' }); continue; }
       const lvl = civ.tech[branch];
-      if (lvl >= TECH_MAX) { researchFails.push({ civId, reason: 'max' }); continue; }
+      if (lvl >= techMaxOf(branch)) { researchFails.push({ civId, reason: 'max' }); continue; }
       const res = TECH_RES[branch];
       const cost = techCost(lvl + 1);
       if (civ.resources[res] < cost) { researchFails.push({ civId, reason: 'cost' }); continue; }
@@ -1128,7 +1134,7 @@ class Game {
     const civ = this.civs.get(civId);
     if (!civ || !civ.alive) return { ok: false, reason: 'dead' };
     if (!(branch in TECH_RES)) return { ok: false, reason: 'branch' };
-    if (civ.tech[branch] >= TECH_MAX) return { ok: false, reason: 'max' };
+    if (civ.tech[branch] >= techMaxOf(branch)) return { ok: false, reason: 'max' };
     this.researchOrders.set(civId, branch);
     return { ok: true, branch, cost: techCost(civ.tech[branch] + 1), res: TECH_RES[branch] };
   }

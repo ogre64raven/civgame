@@ -655,7 +655,7 @@
     for (const btn of document.querySelectorAll('.tech-btn')) {
       const br = btn.dataset.branch;
       const lvl = me.tech[br] || 0;
-      const maxed = lvl >= 5;
+      const maxed = lvl >= (br === 'military' ? 7 : 5);
       btn.textContent = maxed
         ? `${TECH_KO[br]} Lv${lvl} (최고)`
         : `${TECH_KO[br]} Lv${lvl} → ${lvl + 1} (${TECH_RES_KO[br]} ${20 * (lvl + 1)}) — ${TECH_DESC[br]}`;
