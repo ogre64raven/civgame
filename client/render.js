@@ -430,6 +430,7 @@ const Render = (() => {
     let s = state.you + '|' + state.selected + '|' + (vision ? vision.size : -1) + '|' + state.territory.size + '|' + state.gameState + '|' + state.alliances.size + '|' + (state.treasures ? state.treasures.size : 0);
     for (const u of state.units.values()) s += ';' + u.id + ',' + u.x + ',' + u.y + ',' + u.stunned + ',' + (u.controller || 0) + ',' + u.civ;
     for (const n of state.neutrals || []) s += ';N' + n.id + ',' + n.x + ',' + n.y + ',' + n.stunned;
+    if (state.unitAnims) for (const uid of state.unitAnims.keys()) s += ';A' + uid;
     for (const c of state.civs.values()) {
       const t = c.tech || {};
       s += ';' + c.id + ',' + (c.alive ? 1 : 0) + ',' + c.capitalHp + ',' + ((t.military || 0) + '' + (t.defense || 0) + (t.gather || 0) + (t.move || 0));
@@ -653,9 +654,30 @@ const Render = (() => {
       dynamicGroup.add(lb);
     }
 
+    // 이동 중인 유닛: 경로를 따라 걷는 개별 피규어 (위치는 draw에서 매 프레임 갱신)
+    animMeshes.clear();
+    const anims = state.unitAnims || new Map();
+    for (const [uid, anim] of anims) {
+      const u = state.units.get(uid);
+      if (!u) continue;
+      if (!isVis(u.x, u.y)) continue; // 도착 헥스 기준 가시성
+      const civ = state.civs.get(u.civ);
+      if (!civ) continue;
+      const fig = makeFigure(civ.color, (civ.tech && civ.tech.military) || 0);
+      const pin = pinSprite(civ.color);
+      const code = textSprite(civ.code, '#e2e8f0', 5);
+      dynamicGroup.add(fig, pin, code);
+      const [px, py, pz] = animWorldPos(map, anim.steps, 0);
+      fig.position.set(px, py, pz);
+      pin.position.set(px, py + 10.5, pz);
+      code.position.set(px, py + 14, pz);
+      animMeshes.set(uid, { fig, pin, code });
+    }
+
     // 유닛 스택
     const byHex = new Map();
     for (const u of state.units.values()) {
+      if (anims.has(u.id)) continue; // 이동 연출 중인 유닛은 위에서 개별 렌더
       const k = u.x + ',' + u.y;
       if (!byHex.has(k)) byHex.set(k, []);
       byHex.get(k).push(u);
@@ -694,6 +716,23 @@ const Render = (() => {
         gi++;
       }
     }
+  }
+
+  // ── 이동 애니메이션 (실행 턴 초반, 경로를 따라 걷기)
+  const animMeshes = new Map(); // unitId -> { fig, pin, code }
+  function animWorldPos(map, steps, f) {
+    const total = steps.length - 1;
+    const at = (i) => {
+      const [x, y] = steps[i];
+      const [wx, wz] = worldPos(x, y);
+      return [wx, topY(map.rows[y][x]), wz];
+    };
+    if (total <= 0) return at(0);
+    const ft = Math.min(0.9999, Math.max(0, f)) * total;
+    const i = Math.floor(ft), r = ft - i;
+    const a = at(i), b = at(i + 1);
+    if (Math.abs(b[0] - a[0]) > HEX * SQRT3 * 4) return r < 0.5 ? a : b; // 맵 경계 랩 → 점프
+    return [a[0] + (b[0] - a[0]) * r, a[1] + (b[1] - a[1]) * r, a[2] + (b[2] - a[2]) * r];
   }
 
   // ── 전투 연출
@@ -860,6 +899,21 @@ const Render = (() => {
         selRing.visible = true;
       } else selRing.visible = false;
     } else selRing.visible = false;
+
+    // 이동 애니메이션 갱신
+    if (state.unitAnims && state.unitAnims.size) {
+      for (const [uid, anim] of state.unitAnims) {
+        if (now >= anim.end) { state.unitAnims.delete(uid); continue; } // 만료 → sig 변화로 rebuild
+        const m = animMeshes.get(uid);
+        if (!m) continue;
+        const f = (now - anim.start) / (anim.end - anim.start);
+        const [px, py, pz] = animWorldPos(state.map, anim.steps, f);
+        const bob = Math.abs(Math.sin(now / 130)) * 0.9; // 걷는 들썩임
+        m.fig.position.set(px, py + bob, pz);
+        m.pin.position.set(px, py + 10.5, pz);
+        m.code.position.set(px, py + 14, pz);
+      }
+    }
 
     animateFx(state, visionCache);
     if (cloudMesh) cloudMesh.position.y = Math.sin(now / 1600) * 1.4;

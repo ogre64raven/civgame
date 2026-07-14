@@ -94,6 +94,16 @@
   .score-row.winner { color: #fbbf24; font-weight: 700; }
 
   #resHud { bottom: 12px; left: 12px; font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  #unitsHud { bottom: 58px; left: 12px; width: 250px; max-height: 32vh; overflow-y: auto; padding: 8px 10px; }
+  #unitsHud h3 { font-size: 12px; color: #94a3b8; margin-bottom: 6px; font-weight: 600; }
+  .unit-row { display: flex; align-items: center; gap: 6px; font-size: 12.5px; padding: 3px 6px; border-radius: 6px; cursor: pointer; border: 1px solid transparent; }
+  .unit-row:hover { background: #1e293b; }
+  .unit-row.sel { border-color: #38bdf8; background: #16233c; }
+  .unit-row .unm { flex: 1; white-space: nowrap; }
+  .ust { font-variant-numeric: tabular-nums; }
+  .st-stun { color: #f87171; } .st-move { color: #fbbf24; } .st-gather { color: #4ade80; } .st-idle { color: #94a3b8; }
+  .tag-sel { flex: none; font-size: 10px; color: #38bdf8; border: 1px solid #38bdf8; border-radius: 4px; padding: 0 4px; }
+  .tag-deleg { font-size: 10px; color: #d8b4fe; border: 1px solid #7c3aed; border-radius: 4px; padding: 0 3px; }
   #helpHud { bottom: 12px; right: 320px; font-size: 11px; color: #94a3b8; max-width: 340px; }
 
   #toast { position: absolute; bottom: 58px; left: 50%; transform: translateX(-50%); background: rgba(13,20,36,.92); border: 1px solid #263450; border-radius: 8px; padding: 8px 16px; font-size: 13px; opacity: 0; transition: opacity .3s; pointer-events: none; }
@@ -195,6 +205,10 @@
   </div>
 </div>
 
+<div id="unitsHud" class="hud" style="display:none">
+  <h3>내 유닛</h3>
+  <div id="unitList"></div>
+</div>
 <div id="resHud" class="hud" style="display:none"></div>
 <div id="helpHud" class="hud" style="display:none">클릭: 유닛 선택 → 목표 클릭: 이동, 연속 클릭: 웨이포인트 (평지1·구릉1.5·산2·고산3·바다3) · 금상자: 보물 · X: 취소 · Enter: 채팅</div>
 

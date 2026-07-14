@@ -13,6 +13,7 @@
     contacts: new Set(),
     treasures: new Set(),
     neutrals: [],
+    unitAnims: new Map(), // unitId -> { steps, start, end } (실행 턴 이동 연출)
     queuedResearch: null,
     you: null,
     gameState: 'LOBBY',
@@ -105,6 +106,7 @@
         state.contacts = new Set(msg.contacts || []);
         state.treasures = new Set((msg.treasures || []).map(([tx2, ty2]) => tx2 + ',' + ty2));
         state.neutrals = msg.neutrals || [];
+        state.unitAnims = new Map();
         if (msg.token) sessionStorage.setItem('civToken', msg.token);
         if (msg.you != null) state.you = msg.you;
         if (msg.resources) state.resources = msg.resources;
@@ -136,6 +138,7 @@
         state.units = new Map((msg.units || []).map(u => [u.id, u]));
         state.treasures = new Set((msg.treasures || []).map(([tx2, ty2]) => tx2 + ',' + ty2));
         state.neutrals = msg.neutrals || [];
+        state.unitAnims = new Map();
         state.territory = new Map();
         applyTerritory(msg.territory);
         state.phase = msg.phase; state.turn = msg.turn; state.endsAt = msg.endsAt;
@@ -210,8 +213,16 @@
       case 'exec': {
         for (const u of state.units.values()) if (u.stunned > 0) u.stunned--;
 
+        const animNow = Date.now();
         for (const mv of msg.moves) {
           const u = state.units.get(mv.unitId);
+          if (u && mv.steps && mv.steps.length) {
+            state.unitAnims.set(mv.unitId, {
+              steps: [[u.x, u.y], ...mv.steps],
+              start: animNow,
+              end: animNow + Math.min(5000, mv.steps.length * 800),
+            });
+          }
           if (u) { u.x = mv.x; u.y = mv.y; }
           const path = state.myOrders.get(mv.unitId);
           if (path) {
@@ -723,11 +734,57 @@
         pn.className = state.phase === 'MEETING' ? 'meeting' : 'execution';
         $('phaseTimer').textContent = remain;
       }
+      renderUnits();
       Render.draw(state);
     }
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
+
+  // ── 내 유닛 상태 창: 선택·행동불능·이동·채집 표시, 클릭으로 선택+카메라 이동
+  const TER_RES_KO = { g: '곡식', p: '돌', f: '목재', h: '철', m: '철', M: '철' };
+  let unitsSig = '';
+  function renderUnits() {
+    if (!state.map || state.you == null || state.spectator) return;
+    const mine = [...state.units.values()].filter(isMine).sort((a, b) => a.id - b.id);
+    const show = state.gameState === 'RUNNING' && !state.ended && mine.length > 0;
+    let sig = state.selected + '|' + show;
+    for (const u of mine) {
+      sig += ';' + u.id + ',' + u.x + ',' + u.y + ',' + u.stunned + ','
+        + (state.myOrders.get(u.id)?.length || 0) + ','
+        + (state.territory.get(u.x + ',' + u.y) ?? 'n') + ',' + (u.controller || 0);
+    }
+    if (sig === unitsSig) return;
+    unitsSig = sig;
+    $('unitsHud').style.display = show ? '' : 'none';
+    if (!show) return;
+    const box = $('unitList');
+    box.innerHTML = '';
+    let i = 0;
+    for (const u of mine) {
+      i++;
+      const row = document.createElement('div');
+      row.className = 'unit-row' + (state.selected === u.id ? ' sel' : '');
+      let status, cls;
+      const path = state.myOrders.get(u.id);
+      if (u.stunned > 0) { status = `행동불능 ${u.stunned}턴`; cls = 'st-stun'; }
+      else if (path && path.length) { status = `이동 중 · ${path.length}칸 남음`; cls = 'st-move'; }
+      else if (state.territory.get(u.x + ',' + u.y) === u.civ) {
+        status = `채집 중 (${TER_RES_KO[state.map.rows[u.y][u.x]] || '?'})`; cls = 'st-gather';
+      } else { status = '대기'; cls = 'st-idle'; }
+      const delegated = u.controller === state.you && u.civ !== state.you;
+      row.innerHTML = `<span class="unm">유닛 ${i}${delegated ? ' <span class="tag-deleg">위임</span>' : ''}</span>`
+        + `<span class="ust ${cls}">${status}</span>`
+        + (state.selected === u.id ? '<span class="tag-sel">선택됨</span>' : '');
+      row.addEventListener('click', () => {
+        state.selected = u.id;
+        orderChain = null;
+        Render.centerOn(u.x, u.y);
+        renderUnits();
+      });
+      box.append(row);
+    }
+  }
 
   $('joinBtn').addEventListener('click', () => {
     const name = $('nameInput').value.trim();

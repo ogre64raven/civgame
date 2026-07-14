@@ -448,6 +448,7 @@ class Game {
       const civ = this.civs.get(u.civ);
       // 이동력: 기본 3 (+이동 기술 3Lv마다 1). 평지 1, 산지 2, 바다 3 소모
       let budget = 3 + Math.floor((civ.tech.move || 0) / 3);
+      const steps = []; // 이번 턴에 밟은 헥스 (클라이언트 이동 애니메이션용)
       while (order.idx < order.path.length) {
         const [nx, ny] = order.path[order.idx];
         const cost = this.moveCost(nx, ny);
@@ -455,6 +456,7 @@ class Game {
         budget -= cost;
         order.idx++;
         u.x = nx; u.y = ny;
+        steps.push([nx, ny]);
         this.claim(nx, ny, u.civ); // 바다는 claim에서 무시됨
         const tr = this.treasures.get(nx + ',' + ny);
         if (tr) {
@@ -462,7 +464,7 @@ class Game {
           treasureEvents.push(this.grantTreasure(u.civ, tr, nx, ny));
         }
       }
-      moves.push({ unitId, x: u.x, y: u.y });
+      moves.push({ unitId, x: u.x, y: u.y, steps });
       if (order.idx >= order.path.length) this.orders.delete(unitId);
     }
 
